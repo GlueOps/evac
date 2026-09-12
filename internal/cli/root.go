@@ -44,6 +44,7 @@ func (g *globals) client() (*kube.Client, error) {
 // lines are the most important ones.
 func Execute() exitcode.Code {
 	g := &globals{}
+	kube.SilenceKlog()
 
 	root := &cobra.Command{
 		Use:   "evac",
@@ -71,6 +72,7 @@ It operates on the active kubecontext and drains worker nodes only.`,
 
 	root.AddCommand(
 		newNodesCmd(g),
+		newPlanCmd(g),
 		newVersionCmd(),
 	)
 

@@ -267,3 +267,37 @@ func (c *Client) listRCs(ctx context.Context) ([]corev1.ReplicationController, e
 		return l.Items, l.Continue, nil
 	})
 }
+
+// SnapshotFixture is the input to NewSnapshotForTest.
+type SnapshotFixture struct {
+	TakenAt                time.Time
+	Context                string
+	Nodes                  []corev1.Node
+	Pods                   []corev1.Pod
+	PVCs                   []corev1.PersistentVolumeClaim
+	PVs                    []corev1.PersistentVolume
+	StorageClasses         []storagev1.StorageClass
+	CSIDrivers             []storagev1.CSIDriver
+	PDBs                   []policyv1.PodDisruptionBudget
+	ReplicaSets            []appsv1.ReplicaSet
+	Deployments            []appsv1.Deployment
+	StatefulSets           []appsv1.StatefulSet
+	ReplicationControllers []corev1.ReplicationController
+}
+
+// NewSnapshotForTest builds a full snapshot from fixtures.
+//
+// Exported because the packages that consume a snapshot live outside this one
+// and the full marker is unexported — an inventory-only snapshot must stay
+// distinguishable from a complete one, since classification silently produces
+// wrong replica counts without the owner lists.
+func NewSnapshotForTest(f SnapshotFixture) *Snapshot {
+	return &Snapshot{
+		TakenAt: f.TakenAt, Context: f.Context,
+		Nodes: f.Nodes, Pods: f.Pods, PVCs: f.PVCs, PVs: f.PVs,
+		StorageClasses: f.StorageClasses, CSIDrivers: f.CSIDrivers, PDBs: f.PDBs,
+		ReplicaSets: f.ReplicaSets, Deployments: f.Deployments,
+		StatefulSets: f.StatefulSets, ReplicationControllers: f.ReplicationControllers,
+		full: true,
+	}
+}
