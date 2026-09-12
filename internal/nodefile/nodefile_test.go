@@ -1,0 +1,99 @@
+package nodefile
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// EKS contexts are ARNs full of colons and slashes; unsanitized they produce a
+// nonsense path or silently write into a subdirectory.
+func TestSanitizeHandlesEKSARNs(t *testing.T) {
+	t.Parallel()
+	got := Sanitize("arn:aws:eks:us-east-1:123456789012:cluster/prod")
+
+	if strings.ContainsAny(got, ":/") {
+		t.Errorf("Sanitize = %q, still contains a path or ARN separator", got)
+	}
+	if !strings.Contains(got, "prod") {
+		t.Errorf("Sanitize = %q, want the cluster name to survive so the file is recognisable", got)
+	}
+}
+
+func TestSanitize(t *testing.T) {
+	t.Parallel()
+	tests := map[string]string{
+		"k3d-captain": "k3d-captain",
+		"":            "unknown",
+		":::":         "unknown",
+		"a//b":        "a-b", // runs collapse rather than producing a--b
+	}
+	for in, want := range tests {
+		if got := Sanitize(in); got != want {
+			t.Errorf("Sanitize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestDefaultPathIsPerContext(t *testing.T) {
+	t.Parallel()
+	a, b := DefaultPath("cluster-a"), DefaultPath("cluster-b")
+	if a == b {
+		t.Error("two contexts produced the same path; selecting for one cluster would overwrite the other's list")
+	}
+}
+
+func TestReadSkipsCommentsAndAcceptsKubectlNameOutput(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nodes.txt")
+	content := `# generated 2026-09-12T14:02:11Z
+# context: glueops-prod-eu-1
+
+node-a-01
+node/node-a-04
+
+  node-b-02
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"node-a-01", "node-a-04", "node-b-02"}
+	if len(f.Nodes) != len(want) {
+		t.Fatalf("nodes = %v, want %v", f.Nodes, want)
+	}
+	for i := range want {
+		if f.Nodes[i] != want[i] {
+			t.Errorf("nodes[%d] = %q, want %q", i, f.Nodes[i], want[i])
+		}
+	}
+	if f.Context != "glueops-prod-eu-1" {
+		t.Errorf("context = %q, want the header value to be parsed", f.Context)
+	}
+}
+
+func TestWriteThenReadRoundTrips(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "nodes.txt")
+	if err := Write(path, "k3d-evac-dev", []string{"a", "b"}); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Nodes) != 2 || f.Nodes[0] != "a" || f.Nodes[1] != "b" {
+		t.Errorf("nodes = %v, want [a b]", f.Nodes)
+	}
+	if f.Context != "k3d-evac-dev" {
+		t.Errorf("context = %q, want k3d-evac-dev", f.Context)
+	}
+}
