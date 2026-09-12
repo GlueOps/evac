@@ -4,6 +4,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -70,6 +71,15 @@ It operates on the active kubecontext and drains worker nodes only.`,
 	pf.StringVar(&g.kubeconfig, "kubeconfig", "", "path to the kubeconfig file (overrides $KUBECONFIG)")
 	pf.StringVar(&g.context, "context", "", "kubecontext to use (defaults to the active one)")
 
+	// Flag parsing failures are usage errors, not runtime errors. Without this
+	// an unknown flag or an unparseable value exits 1, which tells a wrapper
+	// "the cluster misbehaved" when the truth is "you asked for something that
+	// does not exist". Cobra consults the parent chain, so setting it on the
+	// root covers every subcommand.
+	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return exitcode.Wrap(exitcode.Usage, err)
+	})
+
 	root.AddCommand(
 		newNodesCmd(g),
 		newPlanCmd(g),
@@ -79,7 +89,7 @@ It operates on the active kubecontext and drains worker nodes only.`,
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR  %v\n", err)
-		return exitcode.Of(err)
+		return classify(err)
 	}
 	return exitcode.OK
 }
@@ -94,6 +104,34 @@ func newVersionCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// classify maps an error to an exit code, catching the cobra failures that
+// arrive untyped.
+//
+// Cobra reports an unknown subcommand and a failed argument count as plain
+// errors with no distinguishing type, so there is nothing to match on but the
+// message. That is unpleasant, and it is still better than reporting a typo as
+// an API failure: §9 gives these codes distinct meanings precisely so a wrapper
+// can tell "fix your invocation" from "something is broken".
+func classify(err error) exitcode.Code {
+	if code := exitcode.Of(err); code != exitcode.Error {
+		return code
+	}
+	for _, prefix := range []string{
+		"unknown command",
+		"unknown flag",
+		"unknown shorthand flag",
+		"accepts ",
+		"requires at least",
+		"invalid argument",
+		"flag needs an argument",
+	} {
+		if strings.HasPrefix(err.Error(), prefix) || strings.Contains(err.Error(), prefix) {
+			return exitcode.Usage
+		}
+	}
+	return exitcode.Error
 }
 
 // usageErr marks an error as a flag or input problem, which §9 gives its own

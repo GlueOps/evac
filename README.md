@@ -109,7 +109,7 @@ loudly what it overrode.
 |---|---|---|
 | `0` | Drain completed | — |
 | `1` | Error — API failure, unexpected condition | No |
-| `2` | Usage error — bad flags, unreadable node file | No |
+| `2` | Usage error — bad flags, unknown command, unreadable node file | No |
 | `3` | Timed out waiting on Job pods | Yes, on a timer |
 | `4` | Eviction timeout — often a PDB stall | Only after investigating |
 | `5` | PVC stuck `Terminating` | Only after investigating |
@@ -139,8 +139,9 @@ make docker-test       # unit tests
 make docker-vet        # go vet
 ```
 
-CI runs the same targets natively. Integration tests are gated three ways and are **not** run
-by `go test ./...`:
+CI runs the same targets natively on every pull request, against both the oldest and newest
+supported Kubernetes minor. Integration tests are gated three ways and are **not** run by
+`go test ./...`:
 
 ```sh
 k3d cluster create evac-it

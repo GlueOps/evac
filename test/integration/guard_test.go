@@ -165,6 +165,10 @@ func TestAWSSignalsDisablePVCDeletion(t *testing.T) {
 				}
 				t.Cleanup(func() {
 					_ = client.Clientset.CoreV1().Nodes().Delete(ctx, n.Name, metav1.DeleteOptions{})
+					waitGone(t, func() error {
+						_, err := client.Clientset.CoreV1().Nodes().Get(ctx, n.Name, metav1.GetOptions{})
+						return err
+					})
 				})
 			},
 		},
@@ -181,6 +185,10 @@ func TestAWSSignalsDisablePVCDeletion(t *testing.T) {
 				}
 				t.Cleanup(func() {
 					_ = client.Clientset.StorageV1().CSIDrivers().Delete(ctx, d.Name, metav1.DeleteOptions{})
+					waitGone(t, func() error {
+						_, err := client.Clientset.StorageV1().CSIDrivers().Get(ctx, d.Name, metav1.GetOptions{})
+						return err
+					})
 				})
 			},
 		},
@@ -199,6 +207,11 @@ func TestAWSSignalsDisablePVCDeletion(t *testing.T) {
 	node := workerNodes(t, 1)[0].Name
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			// Each signal must be evaluated against a clean slate. Object
+			// deletion is asynchronous, and DetectProvider returns the first
+			// signal it finds — providerID before CSIDrivers — so a node left
+			// over from the previous subtest would mask the one under test.
+			waitGuardClear(t, node)
 			tc.apply(t)
 
 			sc := buildScope(t, node)
@@ -258,5 +271,45 @@ func createStorageClass(t *testing.T, name, provisioner string) {
 	t.Cleanup(func() {
 		_ = client.Clientset.StorageV1().StorageClasses().
 			Delete(context.Background(), name, metav1.DeleteOptions{})
+		waitGone(t, func() error {
+			_, err := client.Clientset.StorageV1().StorageClasses().
+				Get(context.Background(), name, metav1.GetOptions{})
+			return err
+		})
 	})
+}
+
+// waitGuardClear blocks until the provider guard reports enabled, so each
+// signal is measured against a clean slate rather than the previous one's
+// leftovers.
+func waitGuardClear(t *testing.T, node string) {
+	t.Helper()
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		sc := buildScope(t, node)
+		if !sc.Provider.Disabled {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the provider guard never released: %s", sc.Provider.Signal)
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+// waitGone polls a getter until it reports NotFound. Object deletion is
+// asynchronous, and these signals are read from cluster-wide state.
+func waitGone(t *testing.T, get func() error) {
+	t.Helper()
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		if apierrors.IsNotFound(get()) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Logf("warning: object was still present after 60s")
+			return
+		}
+		time.Sleep(time.Second)
+	}
 }

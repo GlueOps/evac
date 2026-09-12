@@ -167,9 +167,23 @@ func createNamespace(t *testing.T) string {
 	if _, err := client.Clientset.CoreV1().Namespaces().Create(context.Background(), ns, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
+	// Wait for the namespace to actually go away. Deletion is asynchronous and
+	// these tests share a cluster, so returning early leaves the previous
+	// test's pods running on the node the next one is about to drain — which
+	// silently turns an independent test into a dependent one.
 	t.Cleanup(func() {
-		_ = client.Clientset.CoreV1().Namespaces().Delete(
-			context.Background(), name, metav1.DeleteOptions{})
+		ctx := context.Background()
+		if err := client.Clientset.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
+			return
+		}
+		deadline := time.Now().Add(2 * time.Minute)
+		for time.Now().Before(deadline) {
+			if _, err := client.Clientset.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{}); apierrors.IsNotFound(err) {
+				return
+			}
+			time.Sleep(2 * time.Second)
+		}
+		t.Logf("warning: namespace %s was still terminating after 2m", name)
 	})
 	return name
 }
