@@ -275,7 +275,10 @@ func openTerminal() (*os.File, error) {
 // reportOutcome prints the per-node table §9's aggregation rule calls for, so a
 // reader can see which node produced the reported exit code.
 func reportOutcome(rec *output.Recorder, res drain.Result) {
-	if len(res.Nodes) <= 1 {
+	// The old guard was `len(res.Nodes) <= 1`, which meant a run that failed on
+	// its FIRST node printed nothing at all — while phase 1 had already
+	// cordoned every selected node. Always report when anything was skipped.
+	if len(res.Nodes) <= 1 && len(res.Skipped()) == 0 {
 		return
 	}
 
@@ -284,6 +287,15 @@ func reportOutcome(rec *output.Recorder, res drain.Result) {
 	// in order to be precise — which node produced which code — reaching
 	// humans and not machines.
 	for _, n := range res.Nodes {
+		if n.Skipped {
+			rec.Event(output.Event{
+				Level: output.LevelWarn,
+				Node:  n.Node,
+				Msg:   "node outcome",
+				Attrs: map[string]string{"state": "cordoned, not drained"},
+			})
+			continue
+		}
 		level := output.LevelInfo
 		if n.Code != exitcode.OK {
 			level = output.LevelError
@@ -299,11 +311,26 @@ func reportOutcome(rec *output.Recorder, res drain.Result) {
 	var b strings.Builder
 	b.WriteString("\nPer-node outcome:\n")
 	for _, n := range res.Nodes {
-		status := "ok"
-		if n.Code != exitcode.OK {
+		var status string
+		switch {
+		case n.Skipped:
+			status = "cordoned, NOT drained"
+		case n.Code != exitcode.OK:
 			status = fmt.Sprintf("exit %d", n.Code)
+		default:
+			status = "drained"
 		}
 		fmt.Fprintf(&b, "  %-28s %s\n", n.Node, status)
+	}
+
+	// Cordon is one-way, so say plainly what is still out of service.
+	if skipped := res.Skipped(); len(skipped) > 0 {
+		fmt.Fprintf(&b, "\n  %d node(s) were cordoned by phase 1 but never drained, because an\n"+
+			"  earlier node failed. They remain unschedulable until you uncordon them\n"+
+			"  or a re-run completes:\n", len(skipped))
+		for _, n := range skipped {
+			fmt.Fprintf(&b, "    kubectl uncordon %s\n", n)
+		}
 	}
 	rec.Raw(b.String())
 }

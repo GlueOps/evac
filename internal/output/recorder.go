@@ -64,6 +64,8 @@ type payload struct {
 	// flushed, when non-nil, is closed by the writer goroutine once everything
 	// queued before it has been written. See Flush.
 	flushed chan struct{}
+	// progress, when non-nil, replaces the transient status line.
+	progress *string
 }
 
 // New builds a Recorder and opens the log file.
@@ -125,6 +127,12 @@ func (r *Recorder) run() {
 	for p := range r.events {
 		if p.flushed != nil {
 			close(p.flushed)
+			continue
+		}
+		if p.progress != nil {
+			r.clearProgress()
+			r.progressMsg = *p.progress
+			r.drawProgress()
 			continue
 		}
 		r.clearProgress()
@@ -253,34 +261,43 @@ func (r *Recorder) Close() error {
 //
 // It never becomes an event: §9 allows carriage returns on a terminal but the
 // log file and the JSON stream must not contain them. When stdout is not a
-// terminal this is a no-op, and callers emit a periodic heartbeat event instead
-// so CI and tee still show progress.
+// terminal this is a no-op.
+//
+// The message is handed to the writer goroutine rather than rendered here, so
+// progressMsg has exactly one owner. It used to be written by whichever worker
+// called this while the writer goroutine read it to clear and redraw — an
+// unsynchronised string on every TTY run, and one no test could catch, because
+// this function returns early unless stdout is a terminal and every test writes
+// to a buffer.
+//
+// The send is non-blocking, unlike every other payload. Progress frames are
+// worth nothing once superseded, and the writer goroutine fsyncs the audit file
+// on each event — so a blocking send here could park a drain worker behind a
+// slow disk while it should be polling the API. Dropping a frame costs a redraw.
 func (r *Recorder) Progress(msg string) {
 	if !r.tty || r.json {
 		return
 	}
-	r.send(payload{raw: ""}) // flush ordering
-	r.setProgress(msg)
-}
-
-var progressMu sync.Mutex
-
-func (r *Recorder) setProgress(msg string) {
-	progressMu.Lock()
-	defer progressMu.Unlock()
-	r.clearProgress()
-	r.progressMsg = msg
-	r.drawProgress()
+	select {
+	case r.events <- payload{progress: &msg}:
+	default:
+	}
 }
 
 // ClearProgress removes the status line.
+//
+// Blocking, unlike Progress: the final clear must not be dropped, or the last
+// transient line stays on the operator's terminal after the run ends.
 func (r *Recorder) ClearProgress() {
 	if !r.tty || r.json {
 		return
 	}
-	r.setProgress("")
+	empty := ""
+	r.send(payload{progress: &empty})
 }
 
+// clearProgress and drawProgress are called only from the writer goroutine, so
+// they need no synchronisation of their own.
 func (r *Recorder) clearProgress() {
 	if r.progressMsg == "" || !r.tty || r.json {
 		return

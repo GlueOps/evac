@@ -3,11 +3,15 @@ package output
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/creack/pty"
 )
 
 func at(s string) time.Time {
@@ -182,5 +186,89 @@ func TestDefaultLogPathIsPerContextAndSanitized(t *testing.T) {
 	}
 	if !strings.Contains(got, "20260912T140211Z") {
 		t.Errorf("log path %q is missing the timestamp", got)
+	}
+}
+
+// TestProgressIsRaceFreeOnARealTerminal exercises the path every other test in
+// this file cannot reach.
+//
+// Progress returns immediately unless stdout is a terminal, and every other
+// test here writes to a bytes.Buffer — so the progress code has never executed
+// under -race despite running on every interactive drain. It used to write
+// progressMsg on the calling goroutine while the writer goroutine read it to
+// clear and redraw; a real pty is what makes that visible.
+func TestProgressIsRaceFreeOnARealTerminal(t *testing.T) {
+	ptmx, tty, err := pty.Open()
+	if err != nil {
+		t.Skipf("no pty available: %v", err)
+	}
+	defer ptmx.Close()
+	defer tty.Close()
+
+	// Drain the master side, or the writers block once its buffer fills.
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			if _, err := ptmx.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	rec, err := New(Options{Stdout: tty, NoLogFile: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rec.tty {
+		t.Fatal("recorder did not detect the pty; this test would prove nothing")
+	}
+
+	// Several workers updating progress while events interleave, which is what
+	// --parallel does.
+	var wg sync.WaitGroup
+	for w := range 4 {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := range 50 {
+				rec.Progress(fmt.Sprintf("  worker %d waiting (%d)", id, i))
+				rec.Event(Event{Phase: "2", Node: fmt.Sprintf("node-%d", id), Msg: "polling"})
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	rec.ClearProgress()
+	if err := rec.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Close must not panic when it races an in-flight Event: a send on a closed
+// channel is a ready case in a select, so the panic window is real.
+func TestCloseDoesNotPanicAgainstConcurrentEvents(t *testing.T) {
+	var out bytes.Buffer
+	rec, err := New(Options{Stdout: &out, NoLogFile: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 100 {
+				rec.Event(Event{Msg: "concurrent"})
+			}
+		}()
+	}
+	wg.Wait()
+	if err := rec.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Close is idempotent via sync.Once; a second call must not panic either.
+	if err := rec.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

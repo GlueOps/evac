@@ -124,10 +124,54 @@ most severe code wins, and `3` never masks a failure that needs a human.
 
 ## RBAC
 
-`evac` needs `list` on nodes, pods, PVCs, PVs, PodDisruptionBudgets, StorageClasses,
-CSIDrivers, and the workload controllers; `patch` on nodes; `create` on pod eviction; and
-`delete` on PVCs and pods. Enforcing that at the API server is stronger than enforcing it in
-the binary.
+Running `evac` with your own kubeconfig needs no setup — you already have the access. This
+section is for the optional case of a dedicated least-privilege service account.
+
+Note `get` as well as `list`: the two are separate verbs in RBAC, and the `get` calls happen
+during the post-eviction waits, *after* nodes have been cordoned. A role missing them fails
+at the worst possible moment.
+
+```yaml
+rules:
+  # Inventory and scope. Every list is paginated (§3).
+  - apiGroups: [""]
+    resources: [nodes, pods, persistentvolumeclaims, persistentvolumes]
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [replicationcontrollers]
+    verbs: [list, get]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets, statefulsets]
+    verbs: [list, get]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [list]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses, csidrivers]
+    verbs: [list]
+
+  # Waiting. `get` is NOT implied by `list`, and these run after phase 1 has
+  # already cordoned, so a missing verb fails at the worst possible moment.
+  - apiGroups: [""]
+    resources: [nodes, pods, persistentvolumeclaims]
+    verbs: [get]
+
+  # Mutations.
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [patch]            # cordon
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [delete]           # phase 3, fragile pods
+  - apiGroups: [""]
+    resources: [pods/eviction]
+    verbs: [create]           # phase 2
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [delete]           # the destructive step
+```
+
+Enforcing scope at the API server is stronger than enforcing it in the binary.
 
 ## Development
 

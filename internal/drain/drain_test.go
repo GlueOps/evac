@@ -707,3 +707,114 @@ func TestPollNodeReadsEveryPage(t *testing.T) {
 		t.Errorf("jobs = %d, want 0", len(jobs))
 	}
 }
+
+// --- skipped nodes ---------------------------------------------------------
+
+// Phase 1 cordons every selected node before any eviction, so a serial run that
+// stops at node 2 of 5 has still taken all five out of service. Cordon is
+// one-way (§1), so the untouched remainder has to be reported or the operator
+// does not know what is still unschedulable.
+func TestNodesCordonedButNeverAttemptedAreReported(t *testing.T) {
+	t.Parallel()
+	res := Result{Nodes: []NodeResult{
+		{Node: "n1", Code: exitcode.OK},
+		{Node: "n2", Code: exitcode.PVCStuck},
+		{Node: "n3", Skipped: true},
+		{Node: "n4", Skipped: true},
+	}}
+
+	skipped := res.Skipped()
+	if len(skipped) != 2 {
+		t.Fatalf("Skipped = %v, want two nodes", skipped)
+	}
+	// A skipped node was never attempted, so it must not contribute an outcome
+	// — otherwise its zero Code would read as a success.
+	if got := res.Code(); got != exitcode.PVCStuck {
+		t.Errorf("Code = %d, want %d; skipped entries must not affect the aggregate", got, exitcode.PVCStuck)
+	}
+	if !res.Failed() {
+		t.Error("Failed = false despite a failing node")
+	}
+}
+
+// The serial loop must record the remainder rather than truncating the result,
+// which is what made a failure on node 1 of several print nothing at all.
+func TestSerialFailureRecordsTheUntouchedRemainder(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, kube.SnapshotFixture{
+		Nodes: []corev1.Node{node("n1"), node("n2"), node("n3")},
+	}, "n1", "n2", "n3")
+
+	// Fail the very first node's cordon-independent work by making every pod
+	// list fail, so drainNode returns an error on n1.
+	h.client.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewServiceUnavailable("boom")
+	})
+
+	res := h.engine.runSerial(context.Background())
+
+	if len(res.Nodes) != 3 {
+		t.Fatalf("recorded %d node(s), want 3 — the untouched remainder was dropped", len(res.Nodes))
+	}
+	if res.Nodes[0].Skipped {
+		t.Error("the attempted node was marked skipped")
+	}
+	if got := res.Skipped(); len(got) != 2 {
+		t.Errorf("Skipped = %v, want n2 and n3", got)
+	}
+}
+
+// --- phase 4 exit codes ----------------------------------------------------
+
+// Exit 3 is the only code §9 tells a wrapper it may retry on a timer, and that
+// is honest only for Job pods, which finish by themselves. A pod that arrived
+// after the snapshot — one naming its node directly, which the cordon does not
+// stop — will still be there on the next attempt, so reporting 3 sends a
+// wrapper into a loop that burns the full deadline each time forever.
+func TestNonJobBlockerDoesNotReportTheRetryOnATimerCode(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, kube.SnapshotFixture{Nodes: []corev1.Node{node("n1")}}, "n1")
+
+	// Not in the snapshot: it appeared after scope was computed.
+	blocker := pod("default", "pinned-debug", "n1")
+	h.client.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.PodList{Items: []corev1.Pod{blocker}}, nil
+	})
+
+	err := h.engine.phase4(context.Background(), "n1", time.Now())
+	if err == nil {
+		t.Fatal("phase 4 reported success with a pod still on the node")
+	}
+	if got := exitcode.Of(err); got == exitcode.JobTimeout {
+		t.Errorf("exit code = %d (JobTimeout); a wrapper would retry this forever on something that needs a human", got)
+	}
+	if got := exitcode.Of(err); got != exitcode.Error {
+		t.Errorf("exit code = %d, want %d", got, exitcode.Error)
+	}
+
+	out := h.output()
+	for _, want := range []string{"cannot be drained", "pinned-debug", "Re-running will not help"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("diagnostic missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// A Job pod on its own still reports 3: those do finish, so a timed retry is
+// the correct advice.
+func TestOnlyJobPodsStillReportsTheJobDeadlineCode(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, kube.SnapshotFixture{Nodes: []corev1.Node{node("n1")}}, "n1")
+
+	jobPod := pod("analytics", "nightly-rollup", "n1")
+	ctrl := true
+	jobPod.OwnerReferences = []metav1.OwnerReference{{Kind: "Job", Name: "nightly", Controller: &ctrl}}
+	h.client.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, &corev1.PodList{Items: []corev1.Pod{jobPod}}, nil
+	})
+
+	err := h.engine.phase4(context.Background(), "n1", time.Now())
+	if got := exitcode.Of(err); got != exitcode.JobTimeout {
+		t.Errorf("exit code = %d, want %d — a Job pod does finish on its own", got, exitcode.JobTimeout)
+	}
+}

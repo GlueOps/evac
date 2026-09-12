@@ -75,6 +75,11 @@ type NodeResult struct {
 	Node string
 	Code exitcode.Code
 	Err  error
+	// Skipped marks a node that phase 1 cordoned but the run never reached,
+	// because an earlier node failed. Cordon is one-way (§1), so these are left
+	// unschedulable and the operator has to know about them — a serial run that
+	// stops at node 2 of 5 has still taken three nodes out of service.
+	Skipped bool
 }
 
 // Result is the aggregate outcome.
@@ -86,6 +91,9 @@ type Result struct {
 func (r Result) Code() exitcode.Code {
 	codes := make([]exitcode.Code, 0, len(r.Nodes))
 	for _, n := range r.Nodes {
+		if n.Skipped {
+			continue // never attempted, so it contributes no outcome
+		}
 		codes = append(codes, n.Code)
 	}
 	return exitcode.Combine(codes...)
@@ -93,6 +101,17 @@ func (r Result) Code() exitcode.Code {
 
 // Failed reports whether any node failed.
 func (r Result) Failed() bool { return r.Code() != exitcode.OK }
+
+// Skipped returns the nodes phase 1 cordoned that the run never reached.
+func (r Result) Skipped() []string {
+	var out []string
+	for _, n := range r.Nodes {
+		if n.Skipped {
+			out = append(out, n.Node)
+		}
+	}
+	return out
+}
 
 // Run executes phases 1 through 4.
 func (e *Engine) Run(ctx context.Context) (Result, error) {
@@ -150,7 +169,14 @@ func (e *Engine) runSerial(ctx context.Context) Result {
 		res.Nodes = append(res.Nodes, NodeResult{Node: name, Code: exitcode.Of(err), Err: err})
 		if err != nil {
 			// Serial is the safe default precisely so a mistake stops after one
-			// node. Nodes stay cordoned, so a re-run picks up where this left off.
+			// node. Nodes stay cordoned, so a re-run picks up where this left
+			// off — but only if the operator knows which ones are cordoned, so
+			// the untouched remainder is recorded rather than omitted.
+			for j := i + 1; j < len(e.scope.Nodes); j++ {
+				res.Nodes = append(res.Nodes, NodeResult{
+					Node: e.scope.Nodes[j].Name, Skipped: true,
+				})
+			}
 			break
 		}
 	}
