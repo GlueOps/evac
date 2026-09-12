@@ -1,0 +1,5 @@
+/evac
+/dist/
+/.cache/
+*.log
+evac-nodes-*.txt
