@@ -44,6 +44,12 @@ jobs:
           kubectl label namespace evac-integration-sentinel \
             evac.glueops.dev/destructive-tests=allowed
 
+      # A real CSI driver over a real NFS server, so the volume-source guard is
+      # tested against a PV Kubernetes produced rather than one a fixture made
+      # up. Without this the NFS tests skip rather than fail.
+      - name: set up NFS-backed CSI storage
+        run: test/integration/setup-nfs.sh k3d-evac-it-${{ github.run_id }}
+
       - name: integration tests
         env:
           EVAC_TEST_CLUSTER: k3d-evac-it-${{ github.run_id }}

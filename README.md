@@ -151,6 +151,10 @@ kubectl --context k3d-evac-it label namespace evac-integration-sentinel \
 EVAC_TEST_CLUSTER=k3d-evac-it go test -tags integration ./test/integration/...
 ```
 
+Some tests need a volume that is genuinely *not* node-local, to prove the guard
+refuses it. `test/integration/setup-nfs.sh k3d-evac-it` installs `csi-driver-nfs`
+over an NFS server container; without it those tests skip rather than fail.
+
 The sentinel namespace is the guard that matters: it is a property of the target cluster
 rather than of your shell, so a mistyped context name cannot reach a cluster nobody marked as
 disposable.
