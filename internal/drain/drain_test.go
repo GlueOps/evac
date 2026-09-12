@@ -3,6 +3,7 @@ package drain
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -604,5 +605,105 @@ func TestNoPatchOrUpdateIsEverIssuedAgainstAPVC(t *testing.T) {
 		case "patch", "update":
 			t.Errorf("issued a %s against a PVC; finalizers must never be stripped", a.GetVerb())
 		}
+	}
+}
+
+// --- deletion identity (UID preconditions) ---------------------------------
+
+// The guard's verdict is computed against the object in the snapshot, and
+// minutes can pass before the delete. If the claim was replaced in that window
+// the verdict is void, and deleting by name would destroy a volume the
+// allowlist never examined.
+func TestPVCReplacedSinceThePlanIsNotDeleted(t *testing.T) {
+	t.Parallel()
+	pvc, pv := localPair("app", "data-0", "pv-a")
+	h := newHarness(t, kube.SnapshotFixture{
+		Nodes: []corev1.Node{node("n1")},
+		Pods:  []corev1.Pod{pod("app", "web-0", "n1", "data-0")},
+		PVCs:  []corev1.PersistentVolumeClaim{pvc},
+		PVs:   []corev1.PersistentVolume{pv},
+	}, "n1")
+
+	// The API server rejects a delete whose UID precondition no longer matches.
+	h.client.PrependReactor("delete", "persistentvolumeclaims",
+		func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewConflict(
+				schema.GroupResource{Resource: "persistentvolumeclaims"}, "data-0",
+				errors.New("UID precondition not met"))
+		})
+
+	err := h.engine.deletePVC(context.Background(), "2", "n1", h.scope.PVCs[0])
+	if err == nil {
+		t.Fatal("a replaced PVC was treated as deleted; the drain would then evict the pod out from under an unexamined volume")
+	}
+	if !strings.Contains(err.Error(), "replaced since the plan") {
+		t.Errorf("error = %q, want it to explain that the claim changed identity", err)
+	}
+	if !strings.Contains(err.Error(), "Re-run") {
+		t.Errorf("error = %q, want it to tell the operator how to recover", err)
+	}
+}
+
+// A conflict on the POD delete is the opposite case: the pod this call was
+// about is already gone, which is what the call wanted. §7 convergence.
+func TestPodReplacedSinceThePlanIsTreatedAsAlreadyGone(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, kube.SnapshotFixture{
+		Nodes: []corev1.Node{node("n1")},
+		Pods:  []corev1.Pod{pod("app", "web-0", "n1")},
+	}, "n1")
+	h.client.PrependReactor("delete", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewConflict(
+			schema.GroupResource{Resource: "pods"}, "web-0", errors.New("UID precondition not met"))
+	})
+
+	if err := h.engine.deletePod(context.Background(), h.scope.Pods[0].Pod); err != nil {
+		t.Errorf("a replaced pod was reported as an error: %v", err)
+	}
+}
+
+// --- phase 4 terminal check pagination -------------------------------------
+
+// A node can hold more pods than one page — Succeeded Job pods accumulate
+// wherever nothing sets a TTL. Reading only the first page and finding it
+// filtered out would report an empty node and declare a drain complete with
+// workload still running.
+func TestPollNodeReadsEveryPage(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, kube.SnapshotFixture{Nodes: []corev1.Node{node("n1")}}, "n1")
+
+	// Page 1: all DaemonSet pods, every one filtered out. Page 2: a real
+	// workload pod. A single-page read sees an empty node.
+	dsPod := pod("kube-system", "cilium-0", "n1")
+	dsPod.OwnerReferences = []metav1.OwnerReference{{
+		Kind: "DaemonSet", Name: "cilium", Controller: func() *bool { b := true; return &b }(),
+	}}
+	blocker := pod("app", "straggler", "n1")
+
+	calls := 0
+	h.client.PrependReactor("list", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		calls++
+		la := a.(k8stesting.ListAction)
+		if la.GetListRestrictions().Fields != nil && calls == 1 {
+			return true, &corev1.PodList{
+				ListMeta: metav1.ListMeta{Continue: "page-2"},
+				Items:    []corev1.Pod{dsPod},
+			}, nil
+		}
+		return true, &corev1.PodList{Items: []corev1.Pod{blocker}}, nil
+	})
+
+	blockers, jobs, err := h.engine.pollNode(context.Background(), "n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls < 2 {
+		t.Errorf("made %d list call(s); the continue token was not followed", calls)
+	}
+	if len(blockers) != 1 {
+		t.Fatalf("found %d blocker(s), want 1 — the node would have been reported drained with a pod still on it", len(blockers))
+	}
+	if len(jobs) != 0 {
+		t.Errorf("jobs = %d, want 0", len(jobs))
 	}
 }

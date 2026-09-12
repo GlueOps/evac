@@ -367,21 +367,57 @@ func (e *Engine) deletePVC(ctx context.Context, phase, node string, t scope.PVCT
 		Attrs: map[string]string{"source": t.Decision.Source},
 	})
 
+	// Deleted by UID, not by name.
+	//
+	// The guard's verdict (§5) was computed against the object in the snapshot,
+	// and the snapshot is taken before the plan is rendered — so an operator
+	// reading the plan, plus the drain itself, can put minutes between the
+	// decision and the deletion. In that window a claim can be deleted and
+	// recreated under the same name backed by something entirely different.
+	// Deleting by name would then destroy a volume the allowlist was never
+	// shown, which is the one outcome the allowlist exists to prevent.
+	//
+	// UID alone, deliberately: resourceVersion changes on every status or
+	// annotation write, so pinning it would produce constant spurious
+	// conflicts. UID is stable for an object's lifetime and changes only on
+	// delete-and-recreate — exactly the event that voids the verdict.
 	err := e.client.CoreV1().PersistentVolumeClaims(t.PVC.Namespace).
-		Delete(ctx, t.PVC.Name, metav1.DeleteOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
+		Delete(ctx, t.PVC.Name, metav1.DeleteOptions{
+			Preconditions: &metav1.Preconditions{UID: &t.PVC.UID},
+		})
+	switch {
+	case err == nil, apierrors.IsNotFound(err):
+		// Already gone is success: §7 requires every operation be convergent.
+		return nil
+	case apierrors.IsConflict(err):
+		// The claim was replaced since the plan. Its verdict is void, so stop
+		// rather than evicting the pod out from under an unexamined volume.
+		return exitcode.Wrap(exitcode.Error, fmt.Errorf(
+			"pvc %s/%s was replaced since the plan was computed; its volume source has not been checked.\n"+
+				"       Re-run to re-derive scope from current state", t.PVC.Namespace, t.PVC.Name))
+	default:
 		return exitcode.Wrap(exitcode.Error,
 			fmt.Errorf("deleting pvc %s/%s: %w", t.PVC.Namespace, t.PVC.Name, err))
 	}
-	return nil
 }
 
 func (e *Engine) deletePod(ctx context.Context, pod *corev1.Pod) error {
-	err := e.client.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil // §7: convergent
+	// By UID, for the same reason as the claim above: between the snapshot and
+	// here the controller may have replaced this pod, and a StatefulSet's
+	// replacement carries the same namespace and name. Deleting by name would
+	// kill the replacement — possibly already running on a node that was never
+	// selected.
+	err := e.client.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
+		Preconditions: &metav1.Preconditions{UID: &pod.UID},
+	})
+	switch {
+	case err == nil, apierrors.IsNotFound(err), apierrors.IsConflict(err):
+		// NotFound and Conflict both mean "the pod we meant is gone", which is
+		// the outcome this call wanted. §7: convergent.
+		return nil
+	default:
+		return err
 	}
-	return err
 }
 
 // evictWithRetry submits an eviction, retrying 429s.
@@ -399,7 +435,9 @@ func (e *Engine) evictWithRetry(ctx context.Context, phase, node string, pod *co
 	for attempt := 0; ; attempt++ {
 		err := e.evict(ctx, pod)
 		switch {
-		case err == nil, apierrors.IsNotFound(err):
+		case err == nil, apierrors.IsNotFound(err), apierrors.IsConflict(err):
+			// Conflict means the UID moved on: the pod this call was about no
+			// longer exists, which is what eviction was trying to achieve.
 			return nil
 		case !apierrors.IsTooManyRequests(err):
 			return exitcode.Wrap(exitcode.Error,
@@ -430,8 +468,14 @@ func (e *Engine) evictWithRetry(ctx context.Context, phase, node string, pod *co
 }
 
 func (e *Engine) evict(ctx context.Context, pod *corev1.Pod) error {
+	// The eviction subresource honours DeleteOptions, so the same UID
+	// precondition applies: evicting by name could evict a replacement that
+	// happens to share it.
 	return e.client.PolicyV1().Evictions(pod.Namespace).Evict(ctx, &policyv1.Eviction{
 		ObjectMeta: metav1.ObjectMeta{Namespace: pod.Namespace, Name: pod.Name},
+		DeleteOptions: &metav1.DeleteOptions{
+			Preconditions: &metav1.Preconditions{UID: &pod.UID},
+		},
 	})
 }
 

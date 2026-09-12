@@ -61,6 +61,9 @@ type payload struct {
 	// raw is plain text passed straight through: plan output and tables, which
 	// are not events.
 	raw string
+	// flushed, when non-nil, is closed by the writer goroutine once everything
+	// queued before it has been written. See Flush.
+	flushed chan struct{}
 }
 
 // New builds a Recorder and opens the log file.
@@ -120,6 +123,10 @@ func (r *Recorder) run() {
 	enc := json.NewEncoder(r.stdout)
 
 	for p := range r.events {
+		if p.flushed != nil {
+			close(p.flushed)
+			continue
+		}
 		r.clearProgress()
 
 		switch {
@@ -205,6 +212,25 @@ func (r *Recorder) send(p payload) {
 	case r.events <- p:
 	case <-r.done:
 		// Recorder closed; drop rather than block forever.
+	}
+}
+
+// Flush blocks until everything queued so far has actually been written.
+//
+// Needed before anything writes to the terminal outside the recorder — the
+// confirmation prompt does, because it reads from /dev/tty rather than stdin.
+// Without this the prompt can appear above the totals it is asking the operator
+// to approve, since those are still sitting in the queue.
+func (r *Recorder) Flush() {
+	done := make(chan struct{})
+	select {
+	case r.events <- payload{flushed: done}:
+	case <-r.done:
+		return
+	}
+	select {
+	case <-done:
+	case <-r.done:
 	}
 }
 

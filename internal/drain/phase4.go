@@ -15,6 +15,9 @@ import (
 	"github.com/GlueOps/evac/internal/output"
 )
 
+// pollPageSize bounds each page of the per-node poll.
+const pollPageSize = 500
+
 // phase4 waits for the node to empty.
 //
 // Job and CronJob pods are never evicted — they finish on their own, and
@@ -66,16 +69,31 @@ func (e *Engine) phase4(ctx context.Context, node string, drainStart time.Time) 
 // deliberate: it is a bounded poll of a single node during execution, not the
 // inventory sweep §3's rule is about.
 func (e *Engine) pollNode(ctx context.Context, node string) (blockers []*corev1.Pod, jobs []*corev1.Pod, err error) {
-	list, err := e.client.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
+	// Paginated. A single Limit-bounded page is not the same as "the pods on
+	// this node": a node that has accumulated Succeeded Job pods — common
+	// wherever nothing sets a TTL on them — can exceed one page, and if the
+	// first page happens to filter out entirely, this would report an empty
+	// node and declare the drain complete with workload still running. §9's
+	// whole point is that the tool is honest about an incomplete drain.
+	var items []corev1.Pod
+	opts := metav1.ListOptions{
 		FieldSelector: fields.OneTermEqualSelector("spec.nodeName", node).String(),
-		Limit:         500,
-	})
-	if err != nil {
-		return nil, nil, fmt.Errorf("listing pods on %s: %w", node, err)
+		Limit:         pollPageSize,
+	}
+	for {
+		list, err := e.client.CoreV1().Pods(metav1.NamespaceAll).List(ctx, opts)
+		if err != nil {
+			return nil, nil, fmt.Errorf("listing pods on %s: %w", node, err)
+		}
+		items = append(items, list.Items...)
+		if list.Continue == "" {
+			break
+		}
+		opts.Continue = list.Continue
 	}
 
-	for i := range list.Items {
-		p := &list.Items[i]
+	for i := range items {
+		p := &items[i]
 		if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
 			continue
 		}

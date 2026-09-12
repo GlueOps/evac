@@ -208,15 +208,36 @@ func confirm(cmd *cobra.Command, rec *output.Recorder, sc *scope.Scope, yes bool
 		return nil
 	}
 
-	// Default to no. If stdin is not a TTY, fail rather than proceeding or
-	// hanging on a prompt nobody can answer.
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return exitcode.Wrap(exitcode.Usage, fmt.Errorf(
-			"stdin is not a terminal and --yes was not given; refusing to drain unattended"))
-	}
+	// Default to no, and read the answer from the controlling terminal rather
+	// than from stdin.
+	//
+	// stdin is not necessarily free: `-f -` consumes it for the node list, which
+	// is the documented pipeline in §2 —
+	//
+	//	kubectl get nodes -l pool=a -o name | evac drain -f -
+	//
+	// Reading the confirmation from stdin there would see EOF, and the only way
+	// out would be --yes, which turns the documented path into one that skips
+	// confirmation on a destructive command. §8 keeps those two apart
+	// deliberately, so the prompt goes to the terminal instead.
+	// Everything above must be on screen before the question is asked: the
+	// prompt bypasses the recorder, so without this barrier it can overtake the
+	// summary still sitting in the queue.
+	rec.Flush()
 
-	fmt.Fprint(cmd.OutOrStdout(), "\nProceed? [y/N] ")
-	answer, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	prompt, err := openTerminal()
+	if err != nil {
+		// No controlling terminal at all: genuinely unattended. Fail rather
+		// than proceeding or hanging on a question nobody can answer.
+		return exitcode.Wrap(exitcode.Usage, fmt.Errorf(
+			"no terminal available to confirm on and --yes was not given; refusing to drain unattended"))
+	}
+	// Close failure is not actionable: either this is a duplicate handle on
+	// stdin, or a /dev/tty the process is about to stop using.
+	defer func() { _ = prompt.Close() }()
+
+	fmt.Fprint(prompt, "\nProceed? [y/N] ")
+	answer, err := bufio.NewReader(prompt).ReadString('\n')
 	if err != nil {
 		return exitcode.Wrap(exitcode.Aborted, fmt.Errorf("reading confirmation: %w", err))
 	}
@@ -227,6 +248,28 @@ func confirm(cmd *cobra.Command, rec *output.Recorder, sc *scope.Scope, yes bool
 	default:
 		return exitcode.Wrap(exitcode.Aborted, fmt.Errorf("aborted at the confirmation prompt"))
 	}
+}
+
+// openTerminal returns the controlling terminal for reading the confirmation.
+//
+// Prefers stdin when it is a terminal, so a plain `evac drain` behaves exactly
+// as before. Falls back to /dev/tty, which is what makes the piped node-list
+// form work: stdin is the node list, but the operator is still sitting there.
+func openTerminal() (*os.File, error) {
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		// A separate *os.File over the same descriptor, so the caller's
+		// deferred Close cannot close the real stdin out from under anything.
+		return os.NewFile(os.Stdin.Fd(), "/dev/stdin"), nil
+	}
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return nil, err
+	}
+	if !term.IsTerminal(int(tty.Fd())) {
+		_ = tty.Close()
+		return nil, fmt.Errorf("/dev/tty is not a terminal")
+	}
+	return tty, nil
 }
 
 // reportOutcome prints the per-node table §9's aggregation rule calls for, so a

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -162,7 +163,7 @@ func TestNonInteractiveDrainRefusesWithoutYes(t *testing.T) {
 	select {
 	case got := <-done:
 		wantCode(t, got, exitcode.Usage, "no TTY and no --yes")
-		if !strings.Contains(got.output(), "not a terminal") {
+		if !strings.Contains(got.output(), "no terminal available") {
 			t.Errorf("the refusal does not explain itself:\n%s", got.output())
 		}
 	case <-time.After(90 * time.Second):
@@ -311,4 +312,110 @@ func cordoned(t *testing.T, name string) bool {
 		t.Fatal(err)
 	}
 	return n.Spec.Unschedulable
+}
+
+// TestPipedNodeListStillPromptsOnTheTerminal covers the workflow README and
+// SPEC §2 both advertise:
+//
+//	kubectl get nodes -l pool=a -o name | evac drain -f -
+//
+// It used to fail unconditionally. The node list consumes stdin, so the
+// confirmation had nothing to read, and the only way through was --yes — which
+// turns the documented path into one that skips confirmation on a command that
+// destroys data. §8 keeps those two apart deliberately.
+//
+// The prompt now reads the controlling terminal, so the pipeline works and the
+// operator still confirms. Answering "n" must abort without cordoning.
+func TestPipedNodeListStillPromptsOnTheTerminal(t *testing.T) {
+	nodes := workerNodes(t, 1)
+	target := nodes[0].Name
+
+	// A pty so the process has a controlling terminal, with the node list on
+	// stdin — the shape of the documented pipeline.
+	ptmx, tty, err := pty.Open()
+	if err != nil {
+		t.Skipf("no pty available: %v", err)
+	}
+	defer ptmx.Close()
+
+	cmd := exec.Command(evacBinary(t),
+		"--context", client.Context, "drain", "-f", "-", "--no-log-file")
+	cmd.Env = os.Environ()
+	// stdin is the node list, exactly as the documented pipeline has it.
+	cmd.Stdin = strings.NewReader(target + "\n")
+	cmd.Stdout = tty
+	cmd.Stderr = tty
+	// Ctty 1 (stdout) rather than 0: stdin is the pipe, so the terminal the
+	// child should adopt is the one on its stdout.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 1}
+
+	if err := cmd.Start(); err != nil {
+		_ = tty.Close()
+		t.Fatalf("starting evac: %v", err)
+	}
+	// The parent must drop its handle on the slave side, or ptmx never reaches
+	// EOF when the child exits and the reader goroutine below never returns.
+	// pty.Start does this for you; opening the pair by hand does not.
+	_ = tty.Close()
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+
+	var out syncBuffer
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		buf := make([]byte, 4096)
+		for {
+			n, err := ptmx.Read(buf)
+			if n > 0 {
+				out.Write(buf[:n])
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	deadline := time.Now().Add(90 * time.Second)
+	for !strings.Contains(out.String(), "Proceed?") {
+		if time.Now().After(deadline) {
+			_ = cmd.Process.Kill()
+			t.Fatalf("the piped form never reached the prompt:\n%s", out.String())
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// The totals must be on screen before the question: the prompt bypasses the
+	// recorder, so without a flush barrier it can overtake them.
+	body := out.String()
+	if i, j := strings.Index(body, "About to drain"), strings.Index(body, "Proceed?"); i < 0 || i > j {
+		t.Errorf("the confirmation totals did not precede the prompt:\n%s", body)
+	}
+
+	if _, err := ptmx.Write([]byte("n\n")); err != nil {
+		t.Fatal(err)
+	}
+	// Bounded: a hang here would stall the whole suite, which is worse than a
+	// failure.
+	waitErr := make(chan error, 1)
+	go func() { waitErr <- cmd.Wait() }()
+
+	select {
+	case err = <-waitErr:
+	case <-time.After(60 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatalf("evac did not exit after the prompt was answered:\n%s", out.String())
+	}
+	<-readDone
+
+	code := 0
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		code = ee.ExitCode()
+	}
+	if code != int(exitcode.Aborted) {
+		t.Errorf("exit code = %d, want %d\n%s", code, exitcode.Aborted, out.String())
+	}
+	if cordoned(t, target) {
+		t.Errorf("%s was cordoned despite the operator answering no", target)
+	}
 }
