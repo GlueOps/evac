@@ -73,6 +73,7 @@ It operates on the active kubecontext and drains worker nodes only.`,
 	root.AddCommand(
 		newNodesCmd(g),
 		newPlanCmd(g),
+		newDrainCmd(g),
 		newVersionCmd(),
 	)
 
