@@ -60,6 +60,10 @@ jobs:
       - name: integration tests
         env:
           EVAC_TEST_CLUSTER: k3d-evac-it-${{ github.run_id }}-${{ strategy.job-index }}
+          # Turns "no cluster configured" from a silent skip into a hard
+          # failure. Without it a renamed variable on either side would make
+          # the whole suite exit 0 without running anything.
+          EVAC_REQUIRE_INTEGRATION: "1"
         run: go test -tags integration -timeout 25m -v ./test/integration/...
 
       - name: delete cluster

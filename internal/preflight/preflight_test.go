@@ -131,22 +131,6 @@ func find(r *Results, check string) *Finding {
 
 // --- capacity --------------------------------------------------------------
 
-func TestCapacityShortfallBlocksTheDrain(t *testing.T) {
-	t.Parallel()
-	res := run(t,
-		[]corev1.Node{node("n1", "4", "8Gi"), node("n2", "1", "1Gi")},
-		[]corev1.Pod{pod("app", "big", "n1", "3", "6Gi")},
-		"n1")
-
-	f := find(res, "capacity")
-	if f == nil || f.Severity != Fatal {
-		t.Fatalf("capacity finding = %+v, want a fatal shortfall", f)
-	}
-	if !res.Failed() {
-		t.Error("Failed() = false; a capacity shortfall must block the drain")
-	}
-}
-
 func TestCapacitySubtractsWhatAlreadyRunsOnRemainingNodes(t *testing.T) {
 	t.Parallel()
 	// n2 looks big enough on paper, but is already nearly full.
@@ -161,6 +145,9 @@ func TestCapacitySubtractsWhatAlreadyRunsOnRemainingNodes(t *testing.T) {
 	f := find(res, "capacity")
 	if f == nil || f.Severity != Fatal {
 		t.Errorf("capacity = %+v, want fatal — comparing against raw allocatable would ignore the resident pod", f)
+	}
+	if !res.Failed() {
+		t.Error("Failed() = false; a capacity shortfall must block the drain")
 	}
 }
 

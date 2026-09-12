@@ -131,6 +131,11 @@ func Evaluate(
 		return Decision{
 			Reason: fmt.Sprintf("PV %q declares no volume source at all", pv.Name),
 		}
+	case SourceAmbiguous:
+		return Decision{
+			Source: SourceAmbiguous,
+			Reason: fmt.Sprintf("PV %q declares more than one volume source; refusing rather than guessing which backs it", pv.Name),
+		}
 	default:
 		return Decision{
 			Source: src,
@@ -139,6 +144,9 @@ func Evaluate(
 	}
 }
 
+// SourceAmbiguous is reported when a PV declares more than one volume source.
+const SourceAmbiguous = "ambiguous"
+
 // VolumeSource reports which volume source a PV declares, by name.
 //
 // Implemented by reflection over PersistentVolumeSource rather than a switch,
@@ -146,15 +154,28 @@ func Evaluate(
 // type, so a volume source introduced in a future client-go bump is reported
 // under its own name and therefore refused by Evaluate, with no code change and
 // no silent fall-through. Fail-closed becomes structural rather than a promise.
+//
+// It counts the populated fields rather than returning the first one found.
+// Returning the first would make the refusal depend on struct declaration
+// order — Local sits at position 20 of 22, so a PV with both Local and CSI set
+// would be reported as local and deleted. The API server rejects multi-source
+// PVs, but a guard protecting data deletion should not rest on an invariant it
+// does not enforce itself, and objects decoded from manifests or built in tests
+// never pass that validation at all.
 func VolumeSource(pv *corev1.PersistentVolume) string {
 	v := reflect.ValueOf(pv.Spec.PersistentVolumeSource)
 	t := v.Type()
+
+	found := ""
 	for i := range t.NumField() {
 		if f := v.Field(i); f.Kind() == reflect.Pointer && !f.IsNil() {
-			return t.Field(i).Name
+			if found != "" {
+				return SourceAmbiguous
+			}
+			found = t.Field(i).Name
 		}
 	}
-	return ""
+	return found
 }
 
 // describeSource adds the CSI driver name, which is the detail that tells an

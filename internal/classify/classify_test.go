@@ -1,6 +1,7 @@
 package classify
 
 import (
+	"fmt"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -304,15 +305,38 @@ func TestLocalPathHelperPodIsExcludedNotTreatedAsUnmanaged(t *testing.T) {
 }
 
 // The helper-pod exclusion must not swallow a real user pod that happens to
-// share the name prefix.
+// share the name prefix. Each conjunct of isStorageHelper is relaxed on its
+// own: flipping all of them at once, as this test used to, means any single
+// check could be dropped unnoticed.
 func TestUserPodNamedHelperPodIsNotExcluded(t *testing.T) {
 	c := New(Inputs{})
-	// Always-restart and controller-owned: not the provisioner's pod.
-	got := c.Classify(pod("default", "helper-pod-mine", ownedBy("StatefulSet", "helper")))
 
-	if got.Class == Excluded {
-		t.Errorf("class = %q, want it not excluded — only the provisioner's unowned, RestartPolicy=Never pod qualifies", got.Class)
-	}
+	t.Run("controller-owned but RestartPolicy=Never", func(t *testing.T) {
+		p := pod("default", "helper-pod-mine", ownedBy("StatefulSet", "helper"))
+		p.Spec.RestartPolicy = corev1.RestartPolicyNever
+
+		if got := c.Classify(p); got.Class == Excluded {
+			t.Error("a controller-owned pod was excluded as a storage helper; the provisioner's pod has no controller")
+		}
+	})
+
+	t.Run("unowned but RestartPolicy=Always", func(t *testing.T) {
+		p := pod("default", "helper-pod-mine")
+		p.Spec.RestartPolicy = corev1.RestartPolicyAlways
+
+		if got := c.Classify(p); got.Class == Excluded {
+			t.Error("an always-restarting pod was excluded as a storage helper; the provisioner's pod runs once")
+		}
+	})
+
+	t.Run("name merely contains the prefix", func(t *testing.T) {
+		p := pod("default", "my-helper-pod-x")
+		p.Spec.RestartPolicy = corev1.RestartPolicyNever
+
+		if got := c.Classify(p); got.Class == Excluded {
+			t.Error("a pod whose name only contains the prefix was excluded")
+		}
+	})
 }
 
 // --- unmanaged pods --------------------------------------------------------
@@ -356,5 +380,173 @@ func TestMultipleFragileReasonsAreAllRecorded(t *testing.T) {
 	// No PDB means eviction would have worked; this is not the downtime cohort.
 	if got.BearsDowntime() {
 		t.Error("BearsDowntime() = true, want false — with no PDB the eviction API would not refuse it")
+	}
+}
+
+// --- PDB selector forms ----------------------------------------------------
+
+// Every other PDB test here uses MatchLabels. Without this, replacing
+// LabelSelectorAsSelector with a MatchLabels-only comparison passes the whole
+// suite — while every matchExpressions-selected pod silently becomes
+// FragileNoPDB and is direct-deleted in phase 3 instead of evicted.
+func TestPDBWithMatchExpressionsIsHonoured(t *testing.T) {
+	t.Parallel()
+	c := New(Inputs{
+		StatefulSets: []appsv1.StatefulSet{sts("app", "web", 3)},
+		PDBs: []policyv1.PodDisruptionBudget{pdb("app", "web", &metav1.LabelSelector{
+			MatchExpressions: []metav1.LabelSelectorRequirement{{
+				Key:      "app",
+				Operator: metav1.LabelSelectorOpIn,
+				Values:   []string{"web", "api"},
+			}},
+		})},
+	})
+
+	got := c.Classify(pod("app", "web-0", withLabels(map[string]string{"app": "web"}), ownedBy("StatefulSet", "web")))
+
+	if len(got.MatchingPDBs) != 1 || got.MatchingPDBs[0] != "web" {
+		t.Fatalf("matching PDBs = %v, want [web] — a matchExpressions selector must be evaluated, not ignored", got.MatchingPDBs)
+	}
+	if got.Class != Normal {
+		t.Errorf("class = %q, want %q; treating this pod as fragile would delete it outright", got.Class, Normal)
+	}
+}
+
+// A pod can be selected by several budgets. Reporting only the first would
+// under-state what is holding an eviction when one of them stalls.
+func TestAllMatchingPDBsAreReported(t *testing.T) {
+	t.Parallel()
+	labels := map[string]string{"app": "web", "tier": "front"}
+	c := New(Inputs{
+		StatefulSets: []appsv1.StatefulSet{sts("app", "web", 3)},
+		PDBs: []policyv1.PodDisruptionBudget{
+			pdb("app", "by-app", matchLabels(map[string]string{"app": "web"})),
+			pdb("app", "by-tier", matchLabels(map[string]string{"tier": "front"})),
+			pdb("app", "catch-all", &metav1.LabelSelector{}),
+		},
+	})
+
+	got := c.Classify(pod("app", "web-0", withLabels(labels), ownedBy("StatefulSet", "web")))
+
+	if len(got.MatchingPDBs) != 3 {
+		t.Errorf("matching PDBs = %v, want all three", got.MatchingPDBs)
+	}
+}
+
+// An unparseable selector must not be treated as a match: doing so would
+// reclassify the pod as Normal and send it into an eviction that stalls.
+func TestUnparseablePDBSelectorDoesNotMatch(t *testing.T) {
+	t.Parallel()
+	c := New(Inputs{
+		StatefulSets: []appsv1.StatefulSet{sts("app", "web", 3)},
+		PDBs: []policyv1.PodDisruptionBudget{pdb("app", "broken", &metav1.LabelSelector{
+			MatchExpressions: []metav1.LabelSelectorRequirement{{
+				Key: "app", Operator: "Bogus", Values: []string{"web"},
+			}},
+		})},
+	})
+
+	got := c.Classify(pod("app", "web-0", withLabels(map[string]string{"app": "web"}), ownedBy("StatefulSet", "web")))
+
+	if len(got.MatchingPDBs) != 0 {
+		t.Errorf("matching PDBs = %v, want none from a malformed selector", got.MatchingPDBs)
+	}
+	if !got.hasFragileReason(FragileNoPDB) {
+		t.Errorf("reasons = %v, want %q", got.FragileReasons, FragileNoPDB)
+	}
+}
+
+// --- broken ownerReference chains ------------------------------------------
+
+// The ReplicaSet names a Deployment that is not in the snapshot — RBAC gap, or
+// deleted mid-drain. The replica count is then unknowable, and this line is one
+// edit away from §5's named catastrophe: falling back to rs.Spec.Replicas here
+// would make a mid-rollout ReplicaSet at 1 look fragile and delete it outright.
+func TestMissingDeploymentLeavesReplicaCountUnknown(t *testing.T) {
+	t.Parallel()
+	c := New(Inputs{
+		ReplicaSets: []appsv1.ReplicaSet{rs("app", "web-old", 1, "web")},
+		// Deployment "web" deliberately absent.
+		PDBs: []policyv1.PodDisruptionBudget{pdb("app", "web", &metav1.LabelSelector{})},
+	})
+
+	got := c.Classify(pod("app", "web-old-abc", ownedBy("ReplicaSet", "web-old")))
+
+	if got.Replicas != nil {
+		t.Errorf("replicas = %v, want nil — the ReplicaSet's own count must not be substituted", *got.Replicas)
+	}
+	if got.ControllerKind != "Deployment" {
+		t.Errorf("controller kind = %q, want Deployment (the name is known even when the object is not)", got.ControllerKind)
+	}
+	if got.hasFragileReason(FragileSingleReplica) {
+		t.Error("an unknown replica count was treated as a single replica; that deletes the pod instead of evicting it")
+	}
+	if got.Unmanaged() {
+		t.Error("Unmanaged() = true — the pod has a controller, it just cannot be resolved")
+	}
+}
+
+// The ReplicaSet named by the pod is itself absent from the snapshot.
+func TestMissingReplicaSetLeavesReplicaCountUnknown(t *testing.T) {
+	t.Parallel()
+	c := New(Inputs{PDBs: []policyv1.PodDisruptionBudget{pdb("app", "all", &metav1.LabelSelector{})}})
+
+	got := c.Classify(pod("app", "web-abc", ownedBy("ReplicaSet", "gone")))
+
+	if got.Replicas != nil {
+		t.Errorf("replicas = %v, want nil", *got.Replicas)
+	}
+	if got.ControllerKind != "ReplicaSet" {
+		t.Errorf("controller kind = %q, want ReplicaSet", got.ControllerKind)
+	}
+	if got.Unmanaged() {
+		t.Error("Unmanaged() = true — a controller reference exists even if the object does not")
+	}
+}
+
+// A StatefulSet or ReplicationController that is named but absent behaves the
+// same way: the name survives, the count does not.
+func TestMissingStatefulSetLeavesReplicaCountUnknown(t *testing.T) {
+	t.Parallel()
+	c := New(Inputs{PDBs: []policyv1.PodDisruptionBudget{pdb("db", "all", &metav1.LabelSelector{})}})
+
+	got := c.Classify(pod("db", "vault-0", ownedBy("StatefulSet", "vault")))
+
+	if got.Replicas != nil {
+		t.Errorf("replicas = %v, want nil", *got.Replicas)
+	}
+	if got.Class != Normal {
+		t.Errorf("class = %q, want %q — unknown must not imply fragile", got.Class, Normal)
+	}
+}
+
+// --- replica count boundaries ----------------------------------------------
+
+// The single-replica test is `== 1`. A `<= 1` mutation would additionally
+// capture scaled-to-zero workloads, and a `< 2` one the same; both change which
+// pods get deleted rather than evicted.
+func TestSingleReplicaTestIsExactlyOne(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		replicas int32
+		fragile  bool
+	}{
+		{0, false}, // scaled to zero: nothing to protect, nothing to delete
+		{1, true},
+		{2, false},
+		{3, false},
+	} {
+		t.Run(fmt.Sprintf("replicas=%d", tc.replicas), func(t *testing.T) {
+			c := New(Inputs{
+				StatefulSets: []appsv1.StatefulSet{sts("app", "web", tc.replicas)},
+				PDBs:         []policyv1.PodDisruptionBudget{pdb("app", "web", &metav1.LabelSelector{})},
+			})
+			got := c.Classify(pod("app", "web-0", ownedBy("StatefulSet", "web")))
+
+			if got.hasFragileReason(FragileSingleReplica) != tc.fragile {
+				t.Errorf("single-replica reason = %v, want %v for replicas=%d",
+					!tc.fragile, tc.fragile, tc.replicas)
+			}
+		})
 	}
 }

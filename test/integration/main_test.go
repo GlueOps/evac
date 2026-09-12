@@ -37,12 +37,27 @@ const (
 	sentinelValue     = "allowed"
 
 	envCluster = "EVAC_TEST_CLUSTER"
+	// envRequire turns the "no cluster, skip quietly" path into a hard failure.
+	// The workflow sets it; nothing else does. Without it these tests exit 0
+	// for anyone who has no cluster, which is the behaviour a developer wants —
+	// but in CI that same path means `go test` prints ok and the entire suite
+	// silently does nothing.
+	//
+	// Deliberately not keyed on the ambient CI variable: ci.yml also sets that
+	// while running `go vet -tags integration`, so the requirement would be
+	// inferred from the environment rather than declared by the workflow that
+	// actually means it.
+	envRequire = "EVAC_REQUIRE_INTEGRATION"
 )
 
 var client *kube.Client
 
 func TestMain(m *testing.M) {
 	wanted := os.Getenv(envCluster)
+	if wanted == "" && os.Getenv(envRequire) != "" {
+		fatal("%s is set but %s is not — refusing to report success for a suite that did not run",
+			envRequire, envCluster)
+	}
 	if wanted == "" {
 		fmt.Fprintf(os.Stderr, `
 integration tests skipped: %s is not set.

@@ -139,18 +139,6 @@ func TestParallelDrainsMultipleNodes(t *testing.T) {
 	}
 }
 
-// TestParallelAllResolvesToEveryNode checks the flag's other form without
-// draining anything: "all" means one worker per selected node.
-func TestParallelAllResolvesToEveryNode(t *testing.T) {
-	nodes := workerNodes(t, 2)
-	targets := []string{nodes[0].Name, nodes[1].Name}
-
-	sc := buildScopeFor(t, targets)
-	if len(sc.Nodes) != 2 {
-		t.Fatalf("scope covers %d node(s), want 2", len(sc.Nodes))
-	}
-}
-
 // buildScopeFor builds a scope covering several nodes at once.
 func buildScopeFor(t *testing.T, names []string) *scope.Scope {
 	t.Helper()

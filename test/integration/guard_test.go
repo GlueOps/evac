@@ -5,7 +5,6 @@ package integration
 import (
 	"context"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -97,6 +96,8 @@ func TestNFSBackedVolumeSurvivesADrain(t *testing.T) {
 	opts.EvictionTimeout = 3 * time.Minute
 	opts.JobDeadline = 2 * time.Minute
 
+	t.Cleanup(func() { uncordon(t, originalNode) })
+
 	res, err := drain.New(client.Clientset, rec, sc, opts, "evac drain").Run(ctx)
 	if err != nil {
 		t.Fatalf("drain errored: %v", err)
@@ -104,7 +105,6 @@ func TestNFSBackedVolumeSurvivesADrain(t *testing.T) {
 	if res.Failed() {
 		t.Fatalf("drain failed with exit code %d", res.Code())
 	}
-	t.Cleanup(func() { uncordon(t, originalNode) })
 
 	// The claim must be untouched: same volume, no deletion timestamp.
 	pvc, err := client.Clientset.CoreV1().PersistentVolumeClaims(ns).
@@ -129,133 +129,6 @@ func TestNFSBackedVolumeSurvivesADrain(t *testing.T) {
 		t.Errorf("pod is still on %s; the drain kept the claim but did not move the workload", originalNode)
 	}
 	t.Logf("claim preserved on PV %s; pod moved to %s", pvName, moved.Spec.NodeName)
-}
-
-// TestAWSSignalsDisablePVCDeletion drives each of §5's four provider signals
-// against a live cluster.
-//
-// Each is applied, checked, and removed in turn, so a failure cannot leave the
-// guard latched on for later tests. Serial by design: these mutate
-// cluster-scoped objects that DetectProvider reads.
-func TestAWSSignalsDisablePVCDeletion(t *testing.T) {
-	workerNodes(t, 1)
-	ctx := context.Background()
-
-	if sc := buildScope(t, workerNodes(t, 1)[0].Name); sc.Provider.Disabled {
-		t.Fatalf("the guard is already tripped before any signal was applied: %s", sc.Provider.Signal)
-	}
-
-	tests := []struct {
-		name       string
-		wantSignal string
-		apply      func(t *testing.T)
-	}{
-		{
-			name:       "node providerID with an aws:// prefix",
-			wantSignal: "providerID",
-			apply: func(t *testing.T) {
-				// providerID is immutable once the kubelet has set it, so this
-				// introduces a node object rather than patching a real one.
-				n := &corev1.Node{
-					ObjectMeta: metav1.ObjectMeta{Name: "ip-10-0-1-42.ec2.internal"},
-					Spec:       corev1.NodeSpec{ProviderID: "aws:///us-east-1a/i-0abcdef1234567890"},
-				}
-				if _, err := client.Clientset.CoreV1().Nodes().Create(ctx, n, metav1.CreateOptions{}); err != nil {
-					t.Fatal(err)
-				}
-				t.Cleanup(func() {
-					_ = client.Clientset.CoreV1().Nodes().Delete(ctx, n.Name, metav1.DeleteOptions{})
-					waitGone(t, func() error {
-						_, err := client.Clientset.CoreV1().Nodes().Get(ctx, n.Name, metav1.GetOptions{})
-						return err
-					})
-				})
-			},
-		},
-		{
-			name:       "the EBS CSI driver object exists",
-			wantSignal: "CSIDriver ebs.csi.aws.com",
-			apply: func(t *testing.T) {
-				d := &storagev1.CSIDriver{
-					ObjectMeta: metav1.ObjectMeta{Name: "ebs.csi.aws.com"},
-					Spec:       storagev1.CSIDriverSpec{AttachRequired: ptr(true), PodInfoOnMount: ptr(false)},
-				}
-				if _, err := client.Clientset.StorageV1().CSIDrivers().Create(ctx, d, metav1.CreateOptions{}); err != nil {
-					t.Fatal(err)
-				}
-				t.Cleanup(func() {
-					_ = client.Clientset.StorageV1().CSIDrivers().Delete(ctx, d.Name, metav1.DeleteOptions{})
-					waitGone(t, func() error {
-						_, err := client.Clientset.StorageV1().CSIDrivers().Get(ctx, d.Name, metav1.GetOptions{})
-						return err
-					})
-				})
-			},
-		},
-		{
-			name:       "a StorageClass using the EBS CSI provisioner",
-			wantSignal: "ebs.csi.aws.com",
-			apply:      func(t *testing.T) { createStorageClass(t, "evac-test-gp3", "ebs.csi.aws.com") },
-		},
-		{
-			name:       "a StorageClass using the in-tree aws-ebs provisioner",
-			wantSignal: "kubernetes.io/aws-ebs",
-			apply:      func(t *testing.T) { createStorageClass(t, "evac-test-gp2", "kubernetes.io/aws-ebs") },
-		},
-	}
-
-	node := workerNodes(t, 1)[0].Name
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			// Each signal must be evaluated against a clean slate. Object
-			// deletion is asynchronous, and DetectProvider returns the first
-			// signal it finds — providerID before CSIDrivers — so a node left
-			// over from the previous subtest would mask the one under test.
-			waitGuardClear(t, node)
-			tc.apply(t)
-
-			sc := buildScope(t, node)
-			if !sc.Provider.Disabled {
-				t.Fatalf("PVC deletion is still enabled after applying %q", tc.name)
-			}
-			if !strings.Contains(sc.Provider.Signal, tc.wantSignal) {
-				t.Errorf("signal = %q, want it to mention %q", sc.Provider.Signal, tc.wantSignal)
-			}
-			// Nothing may be deletable while the guard is latched, regardless
-			// of what each individual volume source says.
-			if n := len(sc.DeletablePVCs()); n != 0 {
-				t.Errorf("%d PVC(s) are still deletable with the provider guard tripped", n)
-			}
-		})
-	}
-
-	// The cleanups above run as this function returns; confirm the guard
-	// actually releases, or every later test would silently run with deletion
-	// disabled and prove nothing.
-	t.Cleanup(func() {
-		if sc := buildScope(t, node); sc.Provider.Disabled {
-			t.Errorf("the guard is still tripped after cleanup: %s", sc.Provider.Signal)
-		}
-	})
-}
-
-// TestEKSARNContextNameDisablesPVCDeletion covers the fourth signal, which is
-// read from the kubecontext name rather than from any cluster object. It
-// catches an EKS cluster whose nodes have not reported a providerID yet.
-func TestEKSARNContextNameDisablesPVCDeletion(t *testing.T) {
-	got := guard.DetectProvider(nil, nil, nil, "arn:aws:eks:us-east-1:123456789012:cluster/prod")
-	if !got.Disabled {
-		t.Fatal("an EKS ARN context name did not disable PVC deletion")
-	}
-	if !strings.Contains(got.Signal, "EKS ARN") {
-		t.Errorf("signal = %q, want it to name the ARN", got.Signal)
-	}
-
-	// The real cluster's own context must not look like EKS, or every other
-	// test in this package would be running with the guard latched on.
-	if live := guard.DetectProvider(nil, nil, nil, client.Context); live.Disabled {
-		t.Errorf("context %q trips the EKS check: %s", client.Context, live.Signal)
-	}
 }
 
 func createStorageClass(t *testing.T, name, provisioner string) {
@@ -307,9 +180,82 @@ func waitGone(t *testing.T, get func() error) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Logf("warning: object was still present after 60s")
+			t.Errorf("a cluster-scoped test object was still present after 60s; later tests in this package would see it")
 			return
 		}
 		time.Sleep(time.Second)
+	}
+}
+
+// TestProviderGuardSuppressesRealClaims replaces four near-identical subtests.
+//
+// All four §5 provider signals are already driven by
+// guard.TestProviderDetection as a pure function. What a real cluster uniquely
+// establishes is the wiring: that FullSnapshot actually collects the
+// StorageClasses DetectProvider reads, and — the part the old version asserted
+// vacuously — that tripping the guard suppresses claims that WOULD otherwise
+// have been deleted. Asserting "zero deletable PVCs" is meaningless unless
+// there was one to begin with, and on this shared cluster there usually is not.
+//
+// One signal is enough to prove the wiring; the cheapest is a StorageClass,
+// which needs no node object and no providerID immutability workaround.
+func TestProviderGuardSuppressesRealClaims(t *testing.T) {
+	nodes := workerNodes(t, 2)
+	ctx := context.Background()
+	ns := createNamespace(t)
+
+	// A real local-path claim, so the suppression below has something to act on.
+	sts := statefulSet(ns, "data", 1)
+	if _, err := client.Clientset.AppsV1().StatefulSets(ns).Create(ctx, sts, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	pod := waitForPod(t, ns, "data-0", 3*time.Minute)
+	target := pod.Spec.NodeName
+	_ = nodes
+
+	before := buildScope(t, target)
+	if before.Provider.Disabled {
+		t.Fatalf("the guard was already tripped before any signal: %s", before.Provider.Signal)
+	}
+	var deletable int
+	for _, p := range before.DeletablePVCs() {
+		if p.PVC.Namespace == ns {
+			deletable++
+		}
+	}
+	if deletable != 1 {
+		t.Fatalf("%d deletable PVC(s) in %s before the signal, want 1 — without one the suppression assertion proves nothing", deletable, ns)
+	}
+
+	// Registered BEFORE the StorageClass so that LIFO cleanup order runs this
+	// check AFTER the deletion it is verifying. Registering it last would run
+	// it first, while the signal is still present.
+	t.Cleanup(func() {
+		if sc := buildScope(t, target); sc.Provider.Disabled {
+			t.Errorf("the guard is still tripped after cleanup: %s", sc.Provider.Signal)
+		}
+	})
+
+	createStorageClass(t, "evac-test-gp3", "ebs.csi.aws.com")
+
+	after := buildScope(t, target)
+	if !after.Provider.Disabled {
+		t.Fatal("PVC deletion is still enabled after an EBS StorageClass appeared")
+	}
+	if want := "StorageClass evac-test-gp3 uses provisioner ebs.csi.aws.com"; after.Provider.Signal != want {
+		t.Errorf("signal = %q, want %q", after.Provider.Signal, want)
+	}
+	if n := len(after.DeletablePVCs()); n != 0 {
+		t.Errorf("%d PVC(s) are still deletable with the provider guard tripped", n)
+	}
+
+}
+
+// The live cluster's own context must not look like EKS, or every test in this
+// package would be running with the guard latched on and proving nothing. The
+// ARN-parsing itself is a pure function, covered by guard.TestProviderDetection.
+func TestLiveContextIsNotMistakenForEKS(t *testing.T) {
+	if live := guard.DetectProvider(nil, nil, nil, client.Context); live.Disabled {
+		t.Errorf("context %q trips the EKS check: %s", client.Context, live.Signal)
 	}
 }

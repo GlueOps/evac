@@ -309,3 +309,137 @@ func contains(haystack, needle string) bool {
 		return false
 	})()
 }
+
+// A PV declaring two volume sources must be refused rather than resolved by
+// whichever field the struct happens to declare first. Local sits at position
+// 20 of 22, so "return the first non-nil field" would report a Local+CSI volume
+// as local and delete it. The API server rejects multi-source PVs, but objects
+// decoded from manifests or built in tests never pass that validation, and a
+// guard protecting data deletion should not rest on an invariant it does not
+// enforce itself.
+func TestPVWithMoreThanOneVolumeSourceIsRefused(t *testing.T) {
+	t.Parallel()
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pv-1"},
+		Spec: corev1.PersistentVolumeSpec{
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				Local: &corev1.LocalVolumeSource{Path: "/var/lib/rancher/k3s/storage/x"},
+				CSI:   &corev1.CSIPersistentVolumeSource{Driver: "ebs.csi.aws.com"},
+			},
+		},
+	}
+
+	if got := VolumeSource(pv); got != SourceAmbiguous {
+		t.Errorf("VolumeSource = %q, want %q", got, SourceAmbiguous)
+	}
+	got := Evaluate(boundPVC("pv-1"), map[string]*corev1.PersistentVolume{"pv-1": pv}, nil)
+	if got.Allowed {
+		t.Error("a PV declaring both Local and CSI was allowed; the allowlist must not depend on struct field order")
+	}
+	if !contains(got.Reason, "more than one volume source") {
+		t.Errorf("Reason = %q, want it to explain the ambiguity", got.Reason)
+	}
+}
+
+// Provider detection must not fire on a provisioner or context that merely
+// resembles AWS. A false positive disables PVC deletion for the whole run,
+// which turns a drain into a no-op the operator did not ask for.
+func TestProviderDetectionDoesNotFireOnNearMisses(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		classes     []storagev1.StorageClass
+		csiDrivers  []storagev1.CSIDriver
+		contextName string
+	}{
+		{
+			name:    "provisioner with the AWS driver as a prefix of a longer name",
+			classes: []storagev1.StorageClass{{ObjectMeta: metav1.ObjectMeta{Name: "x"}, Provisioner: "ebs.csi.aws.com.example.net"}},
+		},
+		{
+			name:       "CSIDriver whose name merely contains the AWS driver",
+			csiDrivers: []storagev1.CSIDriver{{ObjectMeta: metav1.ObjectMeta{Name: "not-ebs.csi.aws.com"}}},
+		},
+		{
+			name:        "context name containing an ARN rather than starting with one",
+			contextName: "backup-of-arn:aws:eks:us-east-1:1:cluster/prod",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DetectProvider(nil, tc.csiDrivers, tc.classes, tc.contextName)
+			if got.Disabled {
+				t.Errorf("guard tripped on a near miss: %s", got.Signal)
+			}
+		})
+	}
+}
+
+// Each detection loop must scan its whole slice. With one element per fixture,
+// a `[0]`-only regression in any of the three loops passes unnoticed.
+func TestProviderDetectionScansEveryElement(t *testing.T) {
+	t.Parallel()
+	t.Run("nodes", func(t *testing.T) {
+		got := DetectProvider([]corev1.Node{
+			nodeWithProviderID("k3d-agent-0", "k3s://k3d-agent-0"),
+			nodeWithProviderID("ip-10-0-0-1", "aws:///us-east-1a/i-abc"),
+		}, nil, nil, "")
+		if !got.Disabled {
+			t.Error("an AWS node at index 1 was not detected")
+		}
+	})
+	t.Run("csidrivers", func(t *testing.T) {
+		got := DetectProvider(nil, []storagev1.CSIDriver{
+			{ObjectMeta: metav1.ObjectMeta{Name: "nfs.csi.k8s.io"}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "ebs.csi.aws.com"}},
+		}, nil, "")
+		if !got.Disabled {
+			t.Error("the EBS CSI driver at index 1 was not detected")
+		}
+	})
+	t.Run("storageclasses", func(t *testing.T) {
+		got := DetectProvider(nil, nil, []storagev1.StorageClass{
+			{ObjectMeta: metav1.ObjectMeta{Name: "local-path"}, Provisioner: "rancher.io/local-path"},
+			{ObjectMeta: metav1.ObjectMeta{Name: "gp3"}, Provisioner: "ebs.csi.aws.com"},
+		}, "")
+		if !got.Disabled {
+			t.Error("the EBS StorageClass at index 1 was not detected")
+		}
+	})
+}
+
+// describeProvisioner is display-only, but it runs on the refusal path, so a
+// panic there would crash a drain at exactly the wrong moment.
+func TestDescribeProvisionerHandlesMissingAndConflictingSources(t *testing.T) {
+	t.Parallel()
+	t.Run("storage class named but absent", func(t *testing.T) {
+		pvc := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "app", Name: "data-0"},
+			Spec:       corev1.PersistentVolumeClaimSpec{StorageClassName: ptrTo("gone")},
+			Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
+		}
+		got := Evaluate(pvc, nil, map[string]*storagev1.StorageClass{})
+		if got.Allowed {
+			t.Error("an unbound PVC was allowed")
+		}
+	})
+
+	t.Run("both provisioner annotations present and disagreeing", func(t *testing.T) {
+		pvc := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "app", Name: "data-0",
+				Annotations: map[string]string{
+					"volume.kubernetes.io/storage-provisioner":      "rancher.io/local-path",
+					"volume.beta.kubernetes.io/storage-provisioner": "ebs.csi.aws.com",
+				},
+			},
+			Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
+		}
+		got := Evaluate(pvc, nil, nil)
+		if !contains(got.Reason, "rancher.io/local-path") {
+			t.Errorf("Reason = %q, want the non-beta annotation to win", got.Reason)
+		}
+	})
+}
+
+func ptrTo[T any](v T) *T { return &v }

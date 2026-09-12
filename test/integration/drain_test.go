@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,6 +49,12 @@ func TestPhase2OrderingMovesLocalVolumeToAnotherNode(t *testing.T) {
 	originalPV := boundPV(t, ns, "vol-data-0")
 
 	t.Logf("data-0 is on %s with PV %s", originalNode, originalPV)
+
+	// Registered BEFORE the drain: a t.Fatal on any path below would otherwise
+	// leave the node cordoned forever, and workerNodes then filters it out so
+	// later tests SKIP rather than fail — one real failure silently degrades
+	// the rest of the suite.
+	t.Cleanup(func() { uncordon(t, originalNode) })
 
 	// Drain the node it landed on.
 	sc := buildScope(t, originalNode)
@@ -122,11 +129,12 @@ func TestRerunIsConvergent(t *testing.T) {
 	opts.EvictionTimeout = 3 * time.Minute
 	opts.JobDeadline = time.Minute
 
+	t.Cleanup(func() { uncordon(t, target) })
+
 	eng := drain.New(client.Clientset, rec, sc, opts, "evac drain")
 	if _, err := eng.Run(ctx); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	t.Cleanup(func() { uncordon(t, target) })
 
 	// Re-derive scope from live state, as a real re-run does.
 	second := buildScope(t, target)
@@ -162,7 +170,21 @@ func buildScope(t *testing.T, nodeName string) *scope.Scope {
 
 func createNamespace(t *testing.T) string {
 	t.Helper()
-	name := fmt.Sprintf("evac-it-%d", time.Now().UnixNano()%100000)
+	// Include the test name so a collision with a still-Terminating namespace
+	// from another test is impossible rather than merely unlikely.
+	safe := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r + 32
+		}
+		return '-'
+	}, t.Name())
+	if len(safe) > 40 {
+		safe = safe[:40]
+	}
+	name := fmt.Sprintf("evac-it-%s-%d", strings.Trim(safe, "-"), time.Now().UnixNano()%100000)
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
 	if _, err := client.Clientset.CoreV1().Namespaces().Create(context.Background(), ns, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)

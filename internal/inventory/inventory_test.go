@@ -151,14 +151,48 @@ func TestUptimeComesFromReadyTransitionNotNodeAge(t *testing.T) {
 	}
 }
 
-func TestSingleNodeClusterIsDetected(t *testing.T) {
+// The check is "exactly one node AND it is control plane". A mutation to
+// `len(nodes) == 1` alone would report a single-worker cluster as undrainable,
+// and dropping the length check would fire on any cluster whose first node is
+// a control plane node — which is most of them.
+func TestSingleNodeClusterDetection(t *testing.T) {
 	t.Parallel()
-	snap := &kube.Snapshot{
-		TakenAt: time.Now(),
-		Nodes:   []corev1.Node{node("solo", labelled(labelControlPlane, "true"))},
+	tests := []struct {
+		name  string
+		nodes []corev1.Node
+		want  bool
+	}{
+		{
+			name:  "one node that is both control plane and worker",
+			nodes: []corev1.Node{node("solo", labelled(labelControlPlane, "true"))},
+			want:  true,
+		},
+		{
+			name:  "one node that is a plain worker",
+			nodes: []corev1.Node{node("solo")},
+			want:  false,
+		},
+		{
+			name: "control plane plus a worker",
+			nodes: []corev1.Node{
+				node("server-0", labelled(labelControlPlane, "true")),
+				node("agent-0"),
+			},
+			want: false,
+		},
+		{
+			name:  "no nodes at all",
+			nodes: nil,
+			want:  false,
+		},
 	}
-	if !SingleNodeCluster(Build(snap)) {
-		t.Error("SingleNodeCluster = false — a one-node k3s install has nothing drainable and needs its own message")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			snap := &kube.Snapshot{TakenAt: time.Now(), Nodes: tc.nodes}
+			if got := SingleNodeCluster(Build(snap)); got != tc.want {
+				t.Errorf("SingleNodeCluster = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

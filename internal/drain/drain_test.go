@@ -173,8 +173,8 @@ func TestCordonSkipsNodesAlreadyUnschedulable(t *testing.T) {
 	if patches != 1 {
 		t.Errorf("issued %d node patches, want 1 — cordoning an already-cordoned node is a no-op (§7)", patches)
 	}
-	if !strings.Contains(h.output(), "already cordoned") {
-		t.Error("the skip was not reported")
+	if out := h.output(); !strings.Contains(out, "already cordoned") {
+		t.Errorf("the skip was not reported to the operator:\n%s", out)
 	}
 }
 
@@ -253,8 +253,8 @@ func TestPVCAlreadyMarkedForDeletionIsNotDeletedAgain(t *testing.T) {
 	if h.didAction("delete", "persistentvolumeclaims") {
 		t.Error("a re-run re-issued a delete against an already-marked claim")
 	}
-	if !strings.Contains(h.output(), "already marked for deletion") {
-		t.Error("the skip was not reported")
+	if out := h.output(); !strings.Contains(out, "already marked for deletion") {
+		t.Errorf("the skip was not reported to the operator:\n%s", out)
 	}
 }
 
@@ -327,8 +327,8 @@ func TestEvictionRetriesOn429(t *testing.T) {
 	if attempts < 2 {
 		t.Errorf("made %d eviction attempts, want a retry after the 429", attempts)
 	}
-	if !strings.Contains(h.output(), "PodDisruptionBudget") {
-		t.Error("the first 429 was not reported to the operator")
+	if out := h.output(); !strings.Contains(out, "PodDisruptionBudget") {
+		t.Errorf("the first 429 was not reported to the operator:\n%s", out)
 	}
 }
 
@@ -363,14 +363,15 @@ func TestNon429EvictionErrorSurfacesImmediately(t *testing.T) {
 		Nodes: []corev1.Node{node("n1")},
 		Pods:  []corev1.Pod{pod("app", "web-0", "n1")},
 	}, "n1")
+	attempts := 0
 	h.client.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		if a.GetSubresource() != "eviction" {
 			return false, nil, nil
 		}
+		attempts++
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "web-0", nil)
 	})
 
-	start := time.Now()
 	err := h.engine.evictWithRetry(context.Background(), "2", "n1", h.scope.Pods[0].Pod)
 	if err == nil {
 		t.Fatal("a Forbidden eviction reported success")
@@ -378,8 +379,10 @@ func TestNon429EvictionErrorSurfacesImmediately(t *testing.T) {
 	if got := exitcode.Of(err); got != exitcode.Error {
 		t.Errorf("exit code = %d, want %d", got, exitcode.Error)
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Errorf("took %s; a non-429 must not be retried until the timeout", elapsed)
+	// Counting attempts rather than timing: a wall-clock assertion under -race
+	// on a loaded two-core runner measures scheduling noise, not intent.
+	if attempts != 1 {
+		t.Errorf("made %d eviction attempts, want 1 — only a 429 is retried", attempts)
 	}
 }
 
@@ -454,5 +457,152 @@ func TestResultCodeUsesSeverityPrecedence(t *testing.T) {
 	all := Result{Nodes: []NodeResult{{Node: "a", Code: exitcode.OK}, {Node: "b", Code: exitcode.OK}}}
 	if all.Failed() {
 		t.Error("Failed = true when every node succeeded")
+	}
+}
+
+// --- phase 2 / phase 3 call contracts --------------------------------------
+
+// evictionDeletesPod makes the fake behave enough like a real cluster for
+// movePod to progress: the fake's eviction subresource does not remove the pod
+// object, so without this the wait never completes.
+//
+// This models the API's *call* contract, not its semantics. Nothing below
+// asserts anything that depends on finalizers or scheduling.
+func evictionDeletesPod(t *testing.T, h *harness, ns, name string) {
+	t.Helper()
+	evicted := false
+	h.client.PrependReactor("create", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetSubresource() != "eviction" {
+			return false, nil, nil
+		}
+		evicted = true
+		return true, nil, nil
+	})
+	h.client.PrependReactor("get", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if evicted {
+			return true, nil, apierrors.NewNotFound(schema.GroupResource{Resource: "pods"}, name)
+		}
+		return false, nil, nil
+	})
+}
+
+// §5 phase 2: delete the PVC FIRST, then evict.
+//
+// This pins the call contract only — it does NOT prove the ordering avoids the
+// deadlock, which is TestPhase2OrderingMovesLocalVolumeToAnotherNode's job
+// against a real cluster. The two are complementary: this one is deterministic
+// and catches a reversal, the integration test proves a reversal would matter.
+func TestPhase2DeletesThePVCBeforeEvicting(t *testing.T) {
+	t.Parallel()
+	pvc, pv := localPair("app", "data-0", "pv-a")
+	h := newHarness(t, kube.SnapshotFixture{
+		Nodes: []corev1.Node{node("n1")},
+		Pods:  []corev1.Pod{pod("app", "web-0", "n1", "data-0")},
+		PVCs:  []corev1.PersistentVolumeClaim{pvc},
+		PVs:   []corev1.PersistentVolume{pv},
+	}, "n1")
+	evictionDeletesPod(t, h, "app", "web-0")
+
+	if err := h.engine.movePod(context.Background(), "2", "n1", h.scope.Pods[0], false); err != nil {
+		t.Fatalf("movePod: %v\n%s", err, h.out.String())
+	}
+
+	pvcDelete, eviction := -1, -1
+	for i, a := range h.client.Actions() {
+		switch {
+		case a.GetVerb() == "delete" && a.GetResource().Resource == "persistentvolumeclaims":
+			if pvcDelete < 0 {
+				pvcDelete = i
+			}
+		case a.GetVerb() == "create" && a.GetResource().Resource == "pods" && a.GetSubresource() == "eviction":
+			if eviction < 0 {
+				eviction = i
+			}
+		}
+	}
+
+	if pvcDelete < 0 {
+		t.Fatalf("no PVC delete was issued; actions were %v", h.actions())
+	}
+	if eviction < 0 {
+		t.Fatalf("no eviction was issued; actions were %v", h.actions())
+	}
+	if pvcDelete > eviction {
+		t.Errorf("evicted at action %d before deleting the PVC at %d — with that order the controller can recreate the pod while the claim is still healthy, which wedges it Pending forever", eviction, pvcDelete)
+	}
+}
+
+// §5 phase 3: fragile pods are DELETED, never evicted. A single-replica
+// workload with minAvailable:1 allows zero disruptions, so the eviction API
+// would refuse it forever — not slowly, never.
+func TestPhase3DeletesFragilePodsRatherThanEvicting(t *testing.T) {
+	t.Parallel()
+	pvc, pv := localPair("db", "data-vault-0", "pv-a")
+	h := newHarness(t, kube.SnapshotFixture{
+		Nodes: []corev1.Node{node("n1")},
+		Pods:  []corev1.Pod{pod("db", "vault-0", "n1", "data-vault-0")},
+		PVCs:  []corev1.PersistentVolumeClaim{pvc},
+		PVs:   []corev1.PersistentVolume{pv},
+	}, "n1")
+
+	if err := h.engine.movePod(context.Background(), "3", "n1", h.scope.Pods[0], true); err != nil {
+		t.Fatalf("movePod: %v\n%s", err, h.out.String())
+	}
+
+	var sawDelete, sawEviction bool
+	pvcDelete, podDelete := -1, -1
+	for i, a := range h.client.Actions() {
+		if a.GetVerb() == "create" && a.GetSubresource() == "eviction" {
+			sawEviction = true
+		}
+		if a.GetVerb() == "delete" && a.GetResource().Resource == "pods" {
+			sawDelete = true
+			if podDelete < 0 {
+				podDelete = i
+			}
+		}
+		if a.GetVerb() == "delete" && a.GetResource().Resource == "persistentvolumeclaims" && pvcDelete < 0 {
+			pvcDelete = i
+		}
+	}
+
+	if sawEviction {
+		t.Error("a fragile pod went through the eviction API; a restrictive PDB would refuse it forever")
+	}
+	if !sawDelete {
+		t.Fatalf("no pod delete was issued; actions were %v", h.actions())
+	}
+	// §5: the PVC-first ordering matters MORE here, not less — a direct delete
+	// removes the pod object immediately, so the controller recreates faster
+	// and the race window is tighter.
+	if pvcDelete < 0 || pvcDelete > podDelete {
+		t.Errorf("PVC deleted at %d, pod at %d — the claim must be marked first", pvcDelete, podDelete)
+	}
+}
+
+// §5: the tool must never patch finalizers off a PVC. Stripping pvc-protection
+// while a VolumeAttachment still exists is how a volume ends up attached to a
+// node with no Kubernetes object tracking it.
+func TestNoPatchOrUpdateIsEverIssuedAgainstAPVC(t *testing.T) {
+	t.Parallel()
+	pvc, pv := localPair("app", "data-0", "pv-a")
+	h := newHarness(t, kube.SnapshotFixture{
+		Nodes: []corev1.Node{node("n1")},
+		Pods:  []corev1.Pod{pod("app", "web-0", "n1", "data-0")},
+		PVCs:  []corev1.PersistentVolumeClaim{pvc},
+		PVs:   []corev1.PersistentVolume{pv},
+	}, "n1")
+	evictionDeletesPod(t, h, "app", "web-0")
+
+	_ = h.engine.movePod(context.Background(), "2", "n1", h.scope.Pods[0], false)
+
+	for _, a := range h.client.Actions() {
+		if a.GetResource().Resource != "persistentvolumeclaims" {
+			continue
+		}
+		switch a.GetVerb() {
+		case "patch", "update":
+			t.Errorf("issued a %s against a PVC; finalizers must never be stripped", a.GetVerb())
+		}
 	}
 }

@@ -32,7 +32,7 @@ func newDrainCmd(g *globals) *cobra.Command {
 		evictionTimeout time.Duration
 		jobDeadline     time.Duration
 		pvcTimeout      time.Duration
-		jsonOut         bool
+		outputFormat    string
 		logFile         string
 		noLogFile       bool
 	)
@@ -73,9 +73,15 @@ maintenance work is done.`,
 			// flock when this process exits regardless.
 			defer func() { _ = lk.Release() }()
 
+			switch outputFormat {
+			case "text", "json":
+			default:
+				return usageErr("--output %q: want text or json", outputFormat)
+			}
+
 			rec, err := output.New(output.Options{
 				Stdout:    cmd.OutOrStdout(),
-				JSON:      jsonOut,
+				JSON:      outputFormat == "json",
 				LogFile:   logFile,
 				NoLogFile: noLogFile,
 				Context:   cl.Context,
@@ -185,7 +191,8 @@ maintenance work is done.`,
 	f.DurationVar(&evictionTimeout, "eviction-timeout", 10*time.Minute, "per-pod eviction timeout")
 	f.DurationVar(&jobDeadline, "job-deadline", 30*time.Minute, "per-node deadline for waiting on Job pods")
 	f.DurationVar(&pvcTimeout, "pvc-timeout", 5*time.Minute, "how long a PVC may stay Terminating")
-	f.BoolVar(&jsonOut, "json", false, "emit events as newline-delimited JSON on stdout")
+	f.StringVar(&outputFormat, "output", "text",
+		"output format: text, or json for newline-delimited events on stdout")
 	f.StringVar(&logFile, "log-file", "", "override the audit log path")
 	f.BoolVar(&noLogFile, "no-log-file", false, "do not write an audit log file")
 	return cmd
@@ -228,6 +235,24 @@ func reportOutcome(rec *output.Recorder, res drain.Result) {
 	if len(res.Nodes) <= 1 {
 		return
 	}
+
+	// Emitted as events as well as prose. Raw text is suppressed under
+	// --output=json, so a table alone would mean the one thing a wrapper needs
+	// in order to be precise — which node produced which code — reaching
+	// humans and not machines.
+	for _, n := range res.Nodes {
+		level := output.LevelInfo
+		if n.Code != exitcode.OK {
+			level = output.LevelError
+		}
+		rec.Event(output.Event{
+			Level: level,
+			Node:  n.Node,
+			Msg:   "node outcome",
+			Attrs: map[string]string{"exit_code": fmt.Sprint(int(n.Code))},
+		})
+	}
+
 	var b strings.Builder
 	b.WriteString("\nPer-node outcome:\n")
 	for _, n := range res.Nodes {

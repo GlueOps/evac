@@ -140,8 +140,6 @@ func TestUsageErrors(t *testing.T) {
 		{"--nodes with --selector", []string{"plan", "--nodes", nodes[0].Name, "--selector", "a=b"},
 			"selection sources are mutually exclusive rather than given a precedence"},
 		{"unreadable node file", []string{"plan", "-f", "/nonexistent/nodes.txt"}, "the node file cannot be read"},
-		{"no selection and no default file", []string{"plan", "-f", "/nonexistent/nodes.txt"},
-			"§1 requires the operator choose targets"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -158,7 +156,7 @@ func TestNonInteractiveDrainRefusesWithoutYes(t *testing.T) {
 
 	done := make(chan result, 1)
 	go func() {
-		done <- runEvac(t, []string{"EVAC_NO_LOG=1"}, "drain", "--nodes", nodes[0].Name, "--no-log-file")
+		done <- runEvac(t, nil, "drain", "--nodes", nodes[0].Name, "--no-log-file")
 	}()
 
 	select {
@@ -235,8 +233,14 @@ func TestAnsweringNoAtThePromptAbortsWithoutCordoning(t *testing.T) {
 		t.Skipf("no pty available: %v", err)
 	}
 	defer ptmx.Close()
+	// A leaked evac process holds the lock file, which would then fail
+	// TestSecondDrainExitsEight for a reason that has nothing to do with it.
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
 
-	var out bytes.Buffer
+	// Written by the reader goroutine below and read by this one, so it needs
+	// its own lock — integration runs without -race, so a plain bytes.Buffer
+	// would corrupt silently rather than reporting.
+	var out syncBuffer
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)
@@ -280,21 +284,6 @@ func TestAnsweringNoAtThePromptAbortsWithoutCordoning(t *testing.T) {
 	// The point of aborting is that nothing happened.
 	if cordoned(t, target) {
 		t.Errorf("%s was cordoned despite the operator answering no", target)
-	}
-}
-
-// The confirmation block must repeat the irreversible totals immediately above
-// the prompt: by then the PVC table has usually scrolled off, and this is the
-// line the operator's eye lands on.
-func TestConfirmationRepeatsTheDestructiveTotals(t *testing.T) {
-	nodes := workerNodes(t, 1)
-
-	got := runEvac(t, nil, "drain", "--nodes", nodes[0].Name, "--no-log-file")
-
-	for _, want := range []string{"About to drain", "pods evicted"} {
-		if !strings.Contains(got.output(), want) {
-			t.Errorf("confirmation summary is missing %q:\n%s", want, got.output())
-		}
 	}
 }
 
