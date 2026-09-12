@@ -19,6 +19,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          check-latest: true
           cache: true
 
       - name: build
@@ -61,6 +62,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          check-latest: true
           cache: true
       # A tool that deletes data should not be shipping a known-vulnerable
       # client-go. This reports only vulnerabilities actually reachable from
@@ -77,6 +79,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          check-latest: true
           cache: true
       - uses: golangci/golangci-lint-action@v9
         with:

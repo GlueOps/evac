@@ -131,6 +131,10 @@ the binary.
 
 ## Development
 
+Go 1.26.6 or newer is required. That is a security floor, not a feature one:
+earlier 1.26 patches carry stdlib vulnerabilities reachable through client-go's
+TLS paths, and CI fails on them via `govulncheck`.
+
 There is no need for a local Go toolchain — every target runs in a container:
 
 ```sh
