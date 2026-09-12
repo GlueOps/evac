@@ -17,7 +17,7 @@ LDFLAGS := -s -w \
 # re-invokes make inside the container so targets stay defined in one place.
 GO_IMAGE ?= golang:1.26
 
-.PHONY: build test lint vet tidy clean help
+.PHONY: build test lint vet tidy clean help integration
 
 build:
 	CGO_ENABLED=0 $(GO) build -ldflags '$(LDFLAGS)' -o $(BIN) ./cmd/evac
@@ -27,6 +27,12 @@ test:
 
 vet:
 	$(GO) vet ./...
+	$(GO) vet -tags integration ./test/...
+
+# Destructive: see README. Requires EVAC_TEST_CLUSTER plus the sentinel
+# namespace on the target cluster.
+integration:
+	$(GO) test -tags integration -timeout 25m -v ./test/integration/...
 
 tidy:
 	$(GO) mod tidy

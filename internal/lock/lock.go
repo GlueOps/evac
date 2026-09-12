@@ -86,7 +86,7 @@ func AcquireAt(path, context string) (*Lock, error) {
 	}
 
 	if err := checkOwnership(f, path); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, err
 	}
 
@@ -99,7 +99,7 @@ func AcquireAt(path, context string) (*Lock, error) {
 	// which would need a duration, a renewal loop and a force-unlock path.
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		holder := readHolder(path)
-		f.Close()
+		_ = f.Close()
 		if err == unix.EWOULDBLOCK {
 			return nil, &HeldError{Path: path, Holder: holder}
 		}
@@ -108,11 +108,11 @@ func AcquireAt(path, context string) (*Lock, error) {
 
 	// Held. Now it is safe to replace the contents.
 	if err := f.Truncate(0); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("truncating lock file: %w", err)
 	}
 	if _, err := f.Seek(0, 0); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("rewinding lock file: %w", err)
 	}
 	fmt.Fprintf(f, "pid=%d\ncontext=%s\nstarted=%s\n",

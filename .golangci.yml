@@ -1,0 +1,34 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - bodyclose
+    - noctx
+
+  settings:
+    staticcheck:
+      checks: ["all"]
+
+  exclusions:
+    rules:
+      # fmt.Fprint* to an io.Writer the caller already owns. Every one of these
+      # writes to the same writer as a neighbouring call whose error IS checked,
+      # so a failure surfaces there; checking each individually would triple the
+      # size of the rendering code for no behavioural difference.
+      - linters: [errcheck]
+        source: 'fmt\.Fprint(f|ln)?\('
+
+      # Test fixtures deliberately ignore errors on setup helpers where a
+      # failure is reported by the assertion that follows.
+      - path: _test\.go
+        linters: [errcheck]
+
+formatters:
+  enable:
+    - gofmt

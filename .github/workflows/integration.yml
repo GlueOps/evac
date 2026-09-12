@@ -1,0 +1,54 @@
+name: integration
+
+# These tests destroy data. They run against a throwaway k3d cluster created
+# per run, never a shared one, so there is no cross-run state to flake on.
+on:
+  pull_request:
+    types: [labeled, synchronize]
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  k3d:
+    # Only on an explicit label, and never from a fork: a fork PR must not be
+    # able to run destructive tests with this repository's credentials.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (contains(github.event.pull_request.labels.*.name, 'test-integration') &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    # §5's eviction timeout alone is 10 minutes.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: install k3d
+        run: curl -sfL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+
+      - name: create throwaway cluster
+        run: |
+          k3d cluster create evac-it-${{ github.run_id }} --agents 3 --wait
+          kubectl config use-context k3d-evac-it-${{ github.run_id }}
+
+      - name: mark the cluster as safe to destroy data on
+        run: |
+          kubectl create namespace evac-integration-sentinel
+          kubectl label namespace evac-integration-sentinel \
+            evac.glueops.dev/destructive-tests=allowed
+
+      - name: integration tests
+        env:
+          EVAC_TEST_CLUSTER: k3d-evac-it-${{ github.run_id }}
+        run: go test -tags integration -timeout 25m -v ./test/integration/...
+
+      - name: delete cluster
+        if: always()
+        run: k3d cluster delete evac-it-${{ github.run_id }} || true

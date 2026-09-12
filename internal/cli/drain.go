@@ -69,7 +69,9 @@ maintenance work is done.`,
 			if err != nil {
 				return exitcode.Wrap(exitcode.LockHeld, err)
 			}
-			defer lk.Release()
+			// A release failure is not actionable — the kernel drops the
+			// flock when this process exits regardless.
+			defer func() { _ = lk.Release() }()
 
 			rec, err := output.New(output.Options{
 				Stdout:    cmd.OutOrStdout(),
@@ -81,7 +83,15 @@ maintenance work is done.`,
 			if err != nil {
 				return exitcode.Wrap(exitcode.Error, err)
 			}
-			defer rec.Close()
+			// Closing the recorder drains the queue and flushes the audit
+			// file. It must happen before the process exits or the final and
+			// most important lines are lost, so a failure here is reported on
+			// stderr — the recorder itself is gone by then.
+			defer func() {
+				if err := rec.Close(); err != nil {
+					fmt.Fprintf(os.Stderr, "WARN  closing the audit log: %v\n", err)
+				}
+			}()
 
 			if p := rec.LogPath(); p != "" {
 				rec.Rawf("Log file: %s\n\n", p)

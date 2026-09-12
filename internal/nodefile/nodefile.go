@@ -81,7 +81,8 @@ func Read(path string) (*File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading node file: %w", err)
 	}
-	defer fh.Close()
+	// Read-only: a close error cannot affect what was already parsed.
+	defer func() { _ = fh.Close() }()
 
 	f, err := parse(fh)
 	if err != nil {
@@ -128,7 +129,9 @@ func Write(path, context string, nodes []string) error {
 		return fmt.Errorf("creating node file: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op once the rename succeeds
+	// No-op once the rename succeeds; a failure here leaves a stray temp file,
+	// which is not worth failing a write over.
+	defer func() { _ = os.Remove(tmpName) }()
 
 	w := bufio.NewWriter(tmp)
 	fmt.Fprintf(w, "# generated %s\n", time.Now().UTC().Format(time.RFC3339))
@@ -137,7 +140,7 @@ func Write(path, context string, nodes []string) error {
 		fmt.Fprintln(w, n)
 	}
 	if err := w.Flush(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("writing node file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {

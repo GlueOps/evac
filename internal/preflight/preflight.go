@@ -517,12 +517,13 @@ func dedupe(in []string) []string {
 func (r *Results) Summary() string {
 	var b strings.Builder
 	for _, f := range r.Findings {
-		marker := "ok  "
-		if f.Severity == Fatal {
+		var marker string
+		switch {
+		case f.Severity == Fatal:
 			marker = "FAIL"
-		} else if strings.HasPrefix(f.Summary, "ok") {
+		case strings.HasPrefix(f.Summary, "ok"):
 			marker = "ok  "
-		} else {
+		default:
 			marker = "warn"
 		}
 		fmt.Fprintf(&b, "  %s  %-18s %s\n", marker, f.Check, f.Summary)

@@ -1,0 +1,39 @@
+version: 2
+
+project_name: evac
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/evac
+    binary: evac
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    # Stamped into `evac version` and into the header of every audit log file:
+    # a tool that destroys data should name the binary that did it.
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+
+checksum:
+  name_template: checksums.txt
+
+# Release notes come from GitHub's own generator, driven by the PR labeller in
+# .github/configs/labeler.yml — which is managed by external automation and must
+# not be edited here. `mode: append` attaches the binaries to that release
+# rather than overwriting its body.
+changelog:
+  disable: true
+
+release:
+  mode: append
