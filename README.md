@@ -143,8 +143,8 @@ make docker-test       # unit tests
 make docker-vet        # go vet
 ```
 
-CI runs the same targets natively on every pull request, against both the oldest and newest
-supported Kubernetes minor. Integration tests are gated three ways and are **not** run by
+CI runs the same targets natively on every pull request, against every Kubernetes minor in
+the supported skew window (1.34, 1.35, 1.36). Integration tests are gated three ways and are **not** run by
 `go test ./...`:
 
 ```sh
