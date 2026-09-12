@@ -36,6 +36,7 @@ func Plan(w io.Writer, s *scope.Scope, pf *preflight.Results, opts PlanOptions) 
 		return err
 	}
 	planGuardStatus(w, s)
+	planLeftovers(w, s, opts)
 	planUnmanaged(w, s, opts)
 	if err := planEverythingElse(w, s, opts); err != nil {
 		return err
@@ -123,6 +124,35 @@ func planGuardStatus(w io.Writer, s *scope.Scope) {
 	fmt.Fprintf(w, "NOTE  PVC deletion disabled: CSI-backed or AWS cluster detected\n")
 	fmt.Fprintf(w, "      signal: %s\n", s.Provider.Signal)
 	fmt.Fprintf(w, "      %d PVC(s) in scope will NOT be deleted; pods will rebind on reschedule\n\n", len(s.PVCs))
+}
+
+// 2b. Leftover work from a previous run, found via §7's PV-side discovery.
+//
+// Shown only when there is something to show. It appears near the top because
+// it is unfinished destructive work: a PVC already marked for deletion is data
+// that dies the moment its pod restarts, whether or not this run touches it.
+func planLeftovers(w io.Writer, s *scope.Scope, opts PlanOptions) {
+	left := s.Leftovers()
+	if len(left) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "Leftover work from an earlier run (found via PV nodeAffinity):\n\n")
+	_ = Table{
+		Rows:  len(left),
+		Width: opts.Width,
+		Columns: []Column{
+			{Header: "PV", Value: func(i int) string { return left[i].PV.Name }},
+			{Header: "NODE", Value: func(i int) string { return left[i].Node }},
+			{Header: "CLAIM", Value: func(i int) string {
+				if left[i].PVC == nil {
+					return "-"
+				}
+				return left[i].PVC.Namespace + "/" + left[i].PVC.Name
+			}},
+			{Header: "WHY", Value: func(i int) string { return left[i].Reason }},
+		},
+	}.Render(indent(w))
+	fmt.Fprintln(w)
 }
 
 // 3. Permanent pod losses.

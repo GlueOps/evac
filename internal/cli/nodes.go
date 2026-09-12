@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -84,7 +85,7 @@ quorum loss, so they are excluded at every layer.`,
 			}
 
 			if interactive {
-				return runPicker(cmd, cl, nodes, outPath)
+				return runPicker(cmd, cl, nodes, snap.TakenAt.Format(time.RFC3339), outPath)
 			}
 			return nil
 		},
