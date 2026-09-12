@@ -1038,9 +1038,18 @@ the dishonesty the non-zero-exit rule exists to prevent.
   The call count stays fixed per resource type; only page count varies with cluster size.
 - **Use a `Watch`, not polling Gets, for the phase 2 step-3 wait.** The delete event is
   needed precisely, and it is one connection instead of N polls.
-- **Pin `client-go` to the oldest server minor targeted** (v0.35.x for k3s 1.35, which
-  also covers kubeadm on 1.34–1.36 under the ±1 skew policy). Note kubectl v0.37 tracks
-  Kubernetes 1.37 — two minors ahead of k3s 1.35 and outside the supported window.
+- **Pin `client-go` to the oldest server minor targeted.** Currently **v0.35.8**, which
+  under the ±1 skew policy supports Kubernetes **1.34 through 1.36** — the exact set the
+  integration matrix exercises, and the range the GlueOps clusters fall in (k3s 1.34 and
+  1.35 at time of writing).
+
+  This is a support decision, not a routine dependency bump. Moving to v0.37 would shift
+  the window to 1.36–1.38 and leave a 1.34 cluster three minors out of skew; the tool
+  would still appear to work, because the API surface it uses is stable, but it would be
+  running unsupported against a cluster it is about to delete data on. Renovate is
+  configured to hold this family below 0.36 for that reason, so raising it is a deliberate
+  change that must move `.github/workflows/integration.yml`'s matrix and this paragraph
+  together.
 - Cobra for commands. **Do not use `k8s.io/cli-runtime`'s `genericclioptions`** — its
   `AddFlags` registers ~20 flags in one shot, including `-n`, with no selective
   registration, which is precisely what §1 rejects. Declare `--kubeconfig` and `--context`

@@ -18,7 +18,10 @@ set -euo pipefail
 CONTEXT="${1:?usage: setup-nfs.sh <kubecontext> [docker-network]}"
 NETWORK="${2:-k3d-${CONTEXT#k3d-}}"
 NFS_CONTAINER="evac-nfs-${CONTEXT#k3d-}"
-NFS_IMAGE="janeczku/nfs-ganesha:latest"
+# Pinned by digest: ":latest" for a test fixture means a green suite can turn
+# red with no change to this repository.
+# renovate: datasource=docker depName=janeczku/nfs-ganesha versioning=docker
+NFS_IMAGE="janeczku/nfs-ganesha:latest@sha256:17fe1813fd20d9fdfa497a26c8a2e39dd49748cd39dbb0559df7627d9bcf4c53"
 K=(kubectl --context "${CONTEXT}")
 
 echo "==> nfs-ganesha on network ${NETWORK}"
@@ -59,7 +62,12 @@ echo "==> csi-driver-nfs"
 # k3s node image ships no mount.nfs, and the CSI node plugin brings its own.
 TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
-git clone -q --depth 1 https://github.com/kubernetes-csi/csi-driver-nfs.git "${TMP}/csi"
+# Pinned to a release rather than the default branch: this applies manifests
+# with cluster-wide RBAC, so what it installs must not change between runs.
+# renovate: datasource=github-releases depName=kubernetes-csi/csi-driver-nfs
+CSI_NFS_VERSION="v4.13.4"
+git clone -q --depth 1 --branch "${CSI_NFS_VERSION}" \
+  https://github.com/kubernetes-csi/csi-driver-nfs.git "${TMP}/csi"
 for f in rbac-csi-nfs csi-nfs-driverinfo csi-nfs-controller csi-nfs-node; do
   "${K[@]}" apply -f "${TMP}/csi/deploy/${f}.yaml" >/dev/null
 done

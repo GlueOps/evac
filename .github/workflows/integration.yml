@@ -28,15 +28,23 @@ jobs:
         # rather than assumed: the edges are where skew actually bites.
         k3s: ["v1.34.6-k3s1", "v1.35.5-k3s1", "v1.36.4-k3s1"]
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           check-latest: true
           cache: true
 
       - name: install k3d
-        run: curl -sfL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+        env:
+          # renovate: datasource=github-releases depName=k3d-io/k3d
+          K3D_VERSION: v5.9.0
+        run: |
+          # Pinned to a tag rather than main: this pipes a remote script into a
+          # shell, so the content must not be able to change under us between
+          # runs. TAG makes the installer fetch that exact release.
+          curl -sfL "https://raw.githubusercontent.com/k3d-io/k3d/${K3D_VERSION}/install.sh" \
+            | TAG="${K3D_VERSION}" bash
 
       - name: create throwaway cluster
         run: |

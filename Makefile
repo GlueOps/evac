@@ -15,7 +15,12 @@ LDFLAGS := -s -w \
 
 # Debian-based, not -alpine: the alpine image ships no `make`, and the wrapper
 # re-invokes make inside the container so targets stay defined in one place.
-GO_IMAGE ?= golang:1.26
+#
+# Pinned by digest so a local build is reproducible and cannot silently move to
+# a different toolchain patch than the one that was reviewed. Renovate keeps it
+# current; the tag in the comment is what it tracks.
+# renovate: datasource=docker depName=golang versioning=docker
+GO_IMAGE ?= golang:1.26@sha256:3c3e25a4da13fd0478eed2df1eb35a0e667094a7124d3993a6a1d30f71c17e79
 
 .PHONY: build test lint vet tidy clean help integration
 

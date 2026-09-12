@@ -131,9 +131,13 @@ the binary.
 
 ## Development
 
-Go 1.26.6 or newer is required. That is a security floor, not a feature one:
-earlier 1.26 patches carry stdlib vulnerabilities reachable through client-go's
-TLS paths, and CI fails on them via `govulncheck`.
+Go 1.26.6 or newer is required, and `client-go` is held at v0.35.x deliberately — it
+supports Kubernetes 1.34 to 1.36 under the ±1 skew policy, which is what the integration
+matrix tests. Raising it narrows which clusters are supported; see SPEC.md §10.
+
+The Go floor is a security one rather than a feature one: earlier 1.26 patches carry
+stdlib vulnerabilities reachable through client-go's TLS paths, and CI fails on them via
+`govulncheck`.
 
 There is no need for a local Go toolchain — every target runs in a container:
 

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    ":semanticCommits"
+  ],
+  "timezone": "Etc/UTC",
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "description": "The Kubernetes client libraries are held to the minor that supports the server versions in the CI matrix. client-go follows the ±1 skew policy, so v0.35.x covers 1.34 through 1.36. Moving the minor is a decision about which clusters this tool supports, not a routine bump: it must go with a matrix change in .github/workflows/integration.yml and a SPEC.md update.",
+      "matchPackageNames": ["k8s.io/api", "k8s.io/apimachinery", "k8s.io/client-go"],
+      "allowedVersions": "<0.36.0",
+      "groupName": "kubernetes client libraries"
+    },
+    {
+      "description": "Charm libraries move together; a split update leaves bubbletea and bubbles on incompatible versions.",
+      "matchPackageNames": ["github.com/charmbracelet/**"],
+      "groupName": "charmbracelet"
+    },
+    {
+      "description": "Action digests are pinned, so the tag comment is what identifies them. Grouped to keep the noise down.",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions"
+    },
+    {
+      "description": "The k3s versions in the integration matrix define which servers are tested. They are bound to the client-go minor above and must not drift independently.",
+      "matchFileNames": [".github/workflows/integration.yml"],
+      "matchPackageNames": ["rancher/k3s"],
+      "enabled": false
+    }
+  ],
+  "customManagers": [
+    {
+      "description": "Versions pinned in shell scripts and Makefiles, marked with a renovate comment on the preceding line.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^Makefile$/",
+        "/^test/integration/setup-nfs\\.sh$/",
+        "/^\\.github/workflows/.+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?\\s+\\S+?[=:]\\s*\"?(?<currentValue>[^\"@\\s]+)(?:@(?<currentDigest>sha256:[a-f0-9]+))?\"?"
+      ],
+      "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}"
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "labels": ["security"],
+    "automerge": false
+  },
+  "osvVulnerabilityAlerts": true
+}
