@@ -1105,53 +1105,6 @@ the dishonesty the non-zero-exit rule exists to prevent.
   Workers return errors; `main` exits only after the recorder is closed. For a tool whose
   transcript is the audit trail, this is the likeliest way to lose the most important
   final lines.
-- **RBAC.** A dedicated service account with only the verbs this needs is stronger than
-  enforcing scope in the binary. The set below is derived from the call sites, not
-  summarised from memory — an earlier revision of this list omitted `get` entirely, and a
-  role built from it would have failed on the first ownerRef walk, *after* phase 1 had
-  cordoned. `list` does not imply `get`.
-
-  ```yaml
-  rules:
-    # Inventory and scope. Every list is paginated (§3).
-    - apiGroups: [""]
-      resources: [nodes, pods, persistentvolumeclaims, persistentvolumes]
-      verbs: [list]
-    - apiGroups: [""]
-      resources: [replicationcontrollers]
-      verbs: [list, get]
-    - apiGroups: [apps]
-      resources: [deployments, replicasets, statefulsets]
-      verbs: [list, get]
-    - apiGroups: [policy]
-      resources: [poddisruptionbudgets]
-      verbs: [list]
-    - apiGroups: [storage.k8s.io]
-      resources: [storageclasses, csidrivers]
-      verbs: [list]
-
-    # Waiting. `get` is NOT implied by `list`, and these run after phase 1 has
-    # already cordoned, so a missing verb fails at the worst possible moment.
-    - apiGroups: [""]
-      resources: [nodes, pods, persistentvolumeclaims]
-      verbs: [get]
-
-    # Mutations.
-    - apiGroups: [""]
-      resources: [nodes]
-      verbs: [patch]            # cordon
-    - apiGroups: [""]
-      resources: [pods]
-      verbs: [delete]           # phase 3, fragile pods
-    - apiGroups: [""]
-      resources: [pods/eviction]
-      verbs: [create]           # phase 2
-    - apiGroups: [""]
-      resources: [persistentvolumeclaims]
-      verbs: [delete]           # the destructive step
-  ```
-- Bash is the wrong tool here. Error handling and state tracking are exactly what it's
-  worst at, and this is code where a swallowed error deletes data.
 
 ---
 
