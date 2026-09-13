@@ -1,0 +1,81 @@
+name: integration
+
+# These tests destroy data, but only inside a k3d cluster this workflow creates
+# on the runner and deletes afterwards. They touch no real infrastructure and
+# use no secrets, so they run on every pull request rather than behind a label.
+# Add the "skip-integration" label to opt a PR out.
+on:
+  pull_request:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  k3d:
+    if: >-
+      !contains(github.event.pull_request.labels.*.name, 'skip-integration')
+    runs-on: ubuntu-latest
+    # The eviction timeout alone is 10 minutes.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # client-go is pinned to v0.35, so the supported window under the ±1
+        # skew policy is exactly 1.34 through 1.36. All three are exercised
+        # rather than assumed: the edges are where skew actually bites.
+        k3s: ["v1.34.6-k3s1", "v1.35.5-k3s1", "v1.36.4-k3s1"]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+
+      - name: install k3d
+        env:
+          # renovate: datasource=github-releases depName=k3d-io/k3d
+          K3D_VERSION: v5.9.0
+          # The commit v5.9.0 pointed at when this was pinned. A git tag is
+          # mutable — upstream can move it — and this pipes a remote script
+          # into a shell, so the URL is fetched by SHA. TAG still selects which
+          # release binary the script then installs.
+          K3D_INSTALL_SHA: 15dd1e2dbd62c53ed990fce9b7332335e8cb053c
+        run: |
+          curl -sfL "https://raw.githubusercontent.com/k3d-io/k3d/${K3D_INSTALL_SHA}/install.sh" \
+            | TAG="${K3D_VERSION}" bash
+
+      - name: create throwaway cluster
+        run: |
+          k3d cluster create evac-it-${{ github.run_id }}-${{ strategy.job-index }} \
+            --agents 3 --image rancher/k3s:${{ matrix.k3s }} --wait
+          kubectl config use-context k3d-evac-it-${{ github.run_id }}-${{ strategy.job-index }}
+          kubectl version
+
+      - name: mark the cluster as safe to destroy data on
+        run: |
+          kubectl create namespace evac-integration-sentinel
+          kubectl label namespace evac-integration-sentinel \
+            evac.glueops.dev/destructive-tests=allowed
+
+      # A real CSI driver over a real NFS server, so the volume-source guard is
+      # tested against a PV Kubernetes produced rather than one a fixture made
+      # up. Without this the NFS tests skip rather than fail.
+      - name: set up NFS-backed CSI storage
+        run: test/integration/setup-nfs.sh k3d-evac-it-${{ github.run_id }}-${{ strategy.job-index }}
+
+      - name: integration tests
+        env:
+          EVAC_TEST_CLUSTER: k3d-evac-it-${{ github.run_id }}-${{ strategy.job-index }}
+          # Turns "no cluster configured" from a silent skip into a hard
+          # failure. Without it a renamed variable on either side would make
+          # the whole suite exit 0 without running anything.
+          EVAC_REQUIRE_INTEGRATION: "1"
+        run: go test -tags integration -timeout 25m -v ./test/integration/...
+
+      - name: delete cluster
+        if: always()
+        run: k3d cluster delete evac-it-${{ github.run_id }}-${{ strategy.job-index }} || true

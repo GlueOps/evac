@@ -1,0 +1,57 @@
+version: 2
+
+project_name: evac
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/evac
+    binary: evac
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    # Stamped into `evac version` and into the header of every audit log file:
+    # a tool that destroys data should name the binary that did it.
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+# Snapshot builds (make snapshot, or the pr-build workflow) are not releases and
+# must not look like one. No "rc" prefix: these are builds of unmerged code that
+# may never be released, and 0.0.0 already says unreleased. The branch is what
+# an operator needs to know when several are circulating.
+snapshot:
+  # Branch names contain slashes (feat/evac-v1), which would turn the archive
+  # name into a nested path. Flatten them.
+  #
+  # EVAC_BRANCH overrides .Branch because CI checks out a detached HEAD, where
+  # .Branch resolves to the literal "HEAD" and the branch name — the thing an
+  # operator needs when several PR builds are circulating — is lost. The
+  # workflow sets it; a local `make snapshot` falls back to the real branch.
+  version_template: '0.0.0-{{ replace (envOrDefault "EVAC_BRANCH" .Branch) "/" "-" }}.{{ .ShortCommit }}'
+
+archives:
+  - formats: [tar.gz]
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+
+checksum:
+  name_template: checksums.txt
+
+# release-please owns the changelog and creates the GitHub release when its
+# release PR merges; the tag it pushes is what triggers this workflow. So
+# goreleaser must not generate notes of its own, and must attach binaries to the
+# release that already exists rather than replacing it.
+#
+# The App-token tag push is what makes this work at all: GitHub does not trigger
+# workflows from GITHUB_TOKEN events, so a GITHUB_TOKEN-created tag would never
+# reach this build.
+changelog:
+  disable: true
+
+release:
+  mode: append
