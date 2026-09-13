@@ -31,11 +31,13 @@ volume-source guard off. A guard with an escape hatch is a guard someone types p
 ## Install
 
 ```sh
-go install github.com/GlueOps/evac@latest
+go install github.com/GlueOps/evac/cmd/evac@latest
 ```
 
-The capitalisation matters — Go module paths are case-sensitive, and a lowercase import fails
-with `module declares its path as: github.com/GlueOps/evac`.
+The `/cmd/evac` suffix is required: the module root holds no `main` package, so installing
+`github.com/GlueOps/evac` itself fails. The capitalisation matters too — Go module paths are
+case-sensitive, and a lowercase path fails with
+`module declares its path as: github.com/GlueOps/evac`.
 
 Or download a binary from [releases](https://github.com/GlueOps/evac/releases).
 
@@ -104,9 +106,9 @@ appears, so it cannot cleanly bind and the controller waits instead of wedging.
 | **Worker nodes only** | Control plane and etcd nodes are excluded from the inventory picker, from `--nodes` and `--selector`, and a node file naming one is refused outright. No override. |
 | **Local volumes only** | Only `pv.spec.local` is deletable. Everything else — including `hostPath`, which may point into an NFS mount — is refused. Written as an allowlist, so a future CSI driver is refused with no code change. |
 | **Never on AWS/EKS** | Detected from node `providerID`, the EBS CSI driver, StorageClass provisioners, or an EKS ARN context name. Drain still works; PVC deletion is off. |
-| **One drain at a time** | A `flock` on `$XDG_RUNTIME_DIR/evac.lock`. `nodes` and `plan` never take it, so you can always look at a cluster mid-drain. |
+| **One drain at a time** | A `flock` on `$XDG_RUNTIME_DIR/evac.lock`, falling back to `$TMPDIR` then `/tmp` as `evac-<uid>.lock` — on macOS, where `XDG_RUNTIME_DIR` is normally unset, the fallback is the usual path. `nodes` and `plan` never take it, so you can always look at a cluster mid-drain. |
 | **Idempotent** | No checkpoints. Every operation is convergent and scope is re-derived from live state, so a failed run is recovered by running it again. |
-| **Always audited** | Every run writes a timestamped log file in addition to stdout. `--output=json` emits the same events. |
+| **Audited by default** | Every run writes a timestamped `./evac-<context>-<time>.log` in addition to stdout, unless `--no-log-file` is passed or `--log-file` redirects it. `--output=json` emits the same events. |
 
 Preflight blocks the drain on capacity shortfalls and on affinity traps — the case where the
 nodes you selected are the only ones a workload is allowed to run on. `--yes` skips the
@@ -142,7 +144,8 @@ tags `vX.Y.Z`, cuts the GitHub release, and triggers goreleaser to attach binari
 Nothing is released by pushing a tag by hand, and nothing is released from a branch.
 
 The first release will be `0.1.0`. This is pre-1.0 deliberately: the tool has only ever run
-against k3s, and `--parallel` has no unit coverage.
+against k3s, and the concurrent drain path behind `--parallel` is exercised only by the
+integration suite, never by a unit test.
 
 ## Development
 
@@ -159,7 +162,9 @@ There is no need for a local Go toolchain — every target runs in a container:
 ```sh
 make docker-build      # build the binary
 make docker-test       # unit tests
-make docker-vet        # go vet
+make docker-vet        # go vet, including the integration-tagged tests
+make docker-lint       # golangci-lint
+make docker-snapshot   # binaries for every release target, into dist/
 ```
 
 CI runs the same targets natively on every pull request, against every Kubernetes minor in
@@ -185,8 +190,9 @@ disposable.
 
 ### PR builds
 
-Every pull request that touches Go code gets binaries built for it
-automatically — linux and darwin, amd64 and arm64. A comment on the PR links
+Every pull request that touches the build — Go sources, `go.mod`/`go.sum`, the
+`Makefile` or the goreleaser config — gets binaries built for it automatically:
+linux and darwin, amd64 and arm64. A comment on the PR links
 them; they are attached to the workflow run and expire after 7 days.
 
 They are versioned `0.0.0-<branch>.<sha>`, so `evac version` reports which
