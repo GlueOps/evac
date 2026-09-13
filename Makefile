@@ -22,7 +22,7 @@ LDFLAGS := -s -w \
 # renovate: datasource=docker depName=golang versioning=docker
 GO_IMAGE ?= golang:1.26@sha256:3c3e25a4da13fd0478eed2df1eb35a0e667094a7124d3993a6a1d30f71c17e79
 
-.PHONY: build test lint vet tidy clean help integration
+.PHONY: build test lint vet tidy clean help integration snapshot
 
 build:
 	CGO_ENABLED=0 $(GO) build -ldflags '$(LDFLAGS)' -o $(BIN) ./cmd/evac
@@ -41,6 +41,11 @@ integration:
 
 tidy:
 	$(GO) mod tidy
+
+# Release-candidate binaries for every release target, built from the working
+# tree with no tag and nothing published. Output lands in dist/.
+snapshot:
+	goreleaser release --snapshot --clean --skip=publish
 
 clean:
 	rm -rf $(BIN) dist/
@@ -63,3 +68,4 @@ help:
 	@echo "make docker-test    run unit tests"
 	@echo "make docker-lint    run linters"
 	@echo "make docker-tidy    go mod tidy"
+	@echo "make snapshot       RC binaries for all targets (needs goreleaser)"
