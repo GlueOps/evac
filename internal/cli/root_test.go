@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/GlueOps/evac/internal/exitcode"
@@ -69,5 +70,68 @@ func TestAPIFailuresAreNotReclassifiedAsUsageErrors(t *testing.T) {
 			t.Errorf("classify(%q) = %d, want %d — a cluster failure was reported as the operator's mistake",
 				msg, got, exitcode.Error)
 		}
+	}
+}
+
+// The re-run command is handed to an operator to paste, possibly hours later
+// and possibly after switching context in another pane. Without --context it
+// resolves against whatever kubecontext is active then, and pool-style node
+// names collide across clusters — so a command evac printed could cordon nodes
+// and delete local PVCs on a cluster the failed drain never touched.
+func TestRerunCommandPinsTheClusterAndTheResolvedNodes(t *testing.T) {
+	t.Parallel()
+	got := rerunCommand(&globals{}, "prod-eu-1", []string{"node-a-01", "node-b-02"})
+
+	if !strings.Contains(got, "--context prod-eu-1") {
+		t.Errorf("rerun = %q, want it to pin the context", got)
+	}
+	if !strings.Contains(got, "--nodes node-a-01,node-b-02") {
+		t.Errorf("rerun = %q, want the resolved node list", got)
+	}
+}
+
+// An explicit --kubeconfig has to survive too, or the pasted command reads a
+// different file than the run that produced it.
+func TestRerunCommandCarriesAnExplicitKubeconfig(t *testing.T) {
+	t.Parallel()
+	got := rerunCommand(&globals{kubeconfig: "/tmp/kc"}, "c", []string{"n1"})
+	if !strings.Contains(got, "--kubeconfig /tmp/kc") {
+		t.Errorf("rerun = %q, want the kubeconfig pinned", got)
+	}
+}
+
+// Selection modes that cannot be replayed must not be echoed back. -f - reads
+// stdin to EOF, so re-running it blocks on the keyboard with the original node
+// list already consumed; --selector re-derives a different set from live
+// labels, including nodes the first run already drained.
+func TestRerunCommandNeverEchoesBackStdinOrSelector(t *testing.T) {
+	t.Parallel()
+	got := rerunCommand(&globals{}, "c", []string{"n1", "n2"})
+	for _, bad := range []string{"-f -", "--selector"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("rerun = %q, must not contain %q", got, bad)
+		}
+	}
+}
+
+// The node-file advice is only true when nothing was selected and the default
+// path was tried. Keyed on the -f flag it fired for every --nodes/--selector
+// failure, printing "the default node file  was not usable" with an empty path
+// after the operator had plainly given a selection.
+func TestSelectionErrorAdviceOnlyAppearsWhenTheDefaultFileWasUsed(t *testing.T) {
+	t.Parallel()
+	base := errors.New("node(s) not found in cluster: typo-1")
+
+	withDefault := classifySelectionError(base, "./evac-nodes-c.txt", true).Error()
+	if !strings.Contains(withDefault, "default node file") {
+		t.Errorf("default-file error = %q, want the node-file advice", withDefault)
+	}
+
+	fromFlags := classifySelectionError(base, "", false).Error()
+	if strings.Contains(fromFlags, "No node selection given") {
+		t.Errorf("flag error = %q, must not claim no selection was given", fromFlags)
+	}
+	if strings.Contains(fromFlags, "default node file") {
+		t.Errorf("flag error = %q, must not offer node-file advice", fromFlags)
 	}
 }

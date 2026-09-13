@@ -58,6 +58,26 @@ maintenance work is done.`,
 			if brief && full {
 				return usageErr("--brief and --full are mutually exclusive")
 			}
+			// Validated here, before the snapshot and before the lock. A typo'd
+			// --output used to acquire the cross-process lock and pull a full
+			// snapshot before failing, so a mistyped flag blocked a real drain
+			// for the duration.
+			switch outputFormat {
+			case "text", "json":
+			default:
+				return usageErr("--output %q: want text or json", outputFormat)
+			}
+			if logFile != "" && noLogFile {
+				return usageErr("--log-file and --no-log-file are mutually exclusive")
+			}
+			// --output=json suppresses all raw text, including the plan and the
+			// confirmation block, while the prompt goes straight to the
+			// terminal. The combination asks the operator to approve permanent
+			// destruction with an empty screen above the question.
+			if outputFormat == "json" && !yes {
+				return usageErr("--output json needs --yes: the plan and confirmation block are not rendered in JSON mode,\n" +
+					"       so the prompt would appear with nothing above it. Review with `evac plan` first")
+			}
 
 			// The lock covers drain only. nodes and plan are read-only and
 			// must never take it — an operator should always be able to look at
@@ -83,12 +103,6 @@ maintenance work is done.`,
 			// A release failure is not actionable — the kernel drops the
 			// flock when this process exits regardless.
 			defer func() { _ = lk.Release() }()
-
-			switch outputFormat {
-			case "text", "json":
-			default:
-				return usageErr("--output %q: want text or json", outputFormat)
-			}
 
 			rec, err := output.New(output.Options{
 				Stdout:    cmd.OutOrStdout(),
@@ -171,15 +185,27 @@ maintenance work is done.`,
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			rerun := rerunCommand(sf, sel.Origin)
+			rerun := rerunCommand(g, cl.Context, sel.Names())
 			eng := drain.New(cl.Clientset, rec, sc, opts, rerun)
 
 			res, runErr := eng.Run(ctx)
 			rec.ClearProgress()
+			if errors.Is(runErr, context.Canceled) {
+				reportInterrupted(rec, rerun)
+			}
 			reportOutcome(rec, res)
+			// One epilogue on every exit path. It used to run only on full
+			// success, so the operator whose drain failed — the one who most
+			// needs to know what is still cordoned and what was already
+			// destroyed — was the one who did not get told.
+			reportEpilogue(rec, res, sel.Nodes, eng.Destroyed(), len(sc.DeletablePVCs()), cl.Context, rerun)
 
 			if p := rec.LogPath(); p != "" {
 				rec.Rawf("\nLog file: %s\n", p)
+				// Also an event: this line is raw text, which --output=json
+				// drops, so a wrapper could not find the audit file it was
+				// told it had.
+				rec.Event(output.Event{Msg: "audit log", Attrs: map[string]string{"path": p}})
 			}
 			if runErr != nil {
 				return runErr
@@ -187,7 +213,6 @@ maintenance work is done.`,
 			if res.Failed() {
 				return exitcode.Wrap(res.Code(), reportedErr(res))
 			}
-			reportCordoned(rec, sel.Nodes)
 			return nil
 		},
 	}
@@ -213,6 +238,21 @@ maintenance work is done.`,
 func confirm(cmd *cobra.Command, rec *output.Recorder, sc *scope.Scope, yes bool) error {
 	summary := render.ConfirmationSummary(sc)
 	rec.Raw("\n" + summary)
+
+	// Also as an event. Raw text is suppressed under --output=json, so this
+	// block — the summary of everything about to be destroyed — reached humans
+	// and not machines, and a wrapper's job log recorded nothing about what the
+	// run was about to do.
+	rec.Event(output.Event{
+		Msg: "about to drain",
+		Attrs: map[string]string{
+			"nodes":              fmt.Sprint(len(sc.Nodes)),
+			"pvcs_to_destroy":    fmt.Sprint(len(sc.DeletablePVCs())),
+			"unmanaged_pods":     fmt.Sprint(len(sc.Unmanaged())),
+			"downtime_workloads": fmt.Sprint(len(sc.DowntimeBearing())),
+			"pods_to_evict":      fmt.Sprint(sc.Evictable()),
+		},
+	})
 
 	if yes {
 		rec.Raw("\n--yes given, proceeding without confirmation.\n\n")
@@ -291,10 +331,6 @@ func openTerminal() (*os.File, error) {
 func reportOutcome(rec *output.Recorder, res drain.Result) {
 	// The old guard was `len(res.Nodes) <= 1`, which meant a run that failed on
 	// its FIRST node printed nothing at all — while phase 1 had already
-	// cordoned every selected node. Always report when anything was skipped.
-	if len(res.Nodes) <= 1 && len(res.Skipped()) == 0 {
-		return
-	}
 
 	// Emitted as events as well as prose. Raw text is suppressed under
 	// --output=json, so a table alone would mean the one thing a wrapper needs
@@ -325,44 +361,90 @@ func reportOutcome(rec *output.Recorder, res drain.Result) {
 	var b strings.Builder
 	b.WriteString("\nPer-node outcome:\n")
 	for _, n := range res.Nodes {
-		var status string
+		status := n.Code.String()
 		switch {
 		case n.Skipped:
-			status = "cordoned, NOT drained"
+			status = "cordoned, never attempted"
 		case n.Code != exitcode.OK:
-			status = fmt.Sprintf("exit %d", n.Code)
-		default:
-			status = "drained"
+			status = fmt.Sprintf("%s (exit %d)", n.Code, int(n.Code))
 		}
 		fmt.Fprintf(&b, "  %-28s %s\n", n.Node, status)
-	}
-
-	// Cordon is one-way, so say plainly what is still out of service.
-	if skipped := res.Skipped(); len(skipped) > 0 {
-		fmt.Fprintf(&b, "\n  %d node(s) were cordoned by phase 1 but never drained, because an\n"+
-			"  earlier node failed. They remain unschedulable until you uncordon them\n"+
-			"  or a re-run completes:\n", len(skipped))
-		for _, n := range skipped {
-			fmt.Fprintf(&b, "    kubectl uncordon %s\n", n)
-		}
 	}
 	rec.Raw(b.String())
 }
 
-// reportCordoned says what is still out of service and hands over the commands
-// to put it back.
+// reportInterrupted says what a signal left behind.
 //
-// Cordon is one-way and evac never uncordons, so a successful drain still
-// leaves every selected node unschedulable. The failure path already prints
-// these commands per node; printing a sentence instead on success had it
-// backwards, because success is the case where the operator is finished and
-// wants their cluster back.
-func reportCordoned(rec *output.Recorder, nodes []inventory.Node) {
+// Ctrl-C used to print "ERROR context canceled" and nothing else, while the
+// cluster held a cordoned node, a PVC marked for deletion, and a pod evicted
+// mid-flight. The operator was told none of it and given no way back.
+func reportInterrupted(rec *output.Recorder, rerun string) {
+	rec.Diagnostic(output.Diagnostic{
+		Headline: "interrupted — the drain stopped on your signal",
+		Detail: []string{
+			"any PVC already deleted is gone; a pod may be mid-eviction",
+			"nothing else was started after the signal",
+		},
+		Rerun: rerun,
+	})
+}
+
+// reportEpilogue is the last thing printed, on every exit path.
+//
+// Two questions matter when a drain ends, and neither was answered before:
+// what did it actually destroy, and what is still out of service. The first
+// existed only as a prediction made before the run, so after a failure the
+// amount of irreversible damage could only be recovered by counting events by
+// hand. The second was printed for nodes phase 1 cordoned but never reached,
+// and not for the node that actually failed — which is cordoned, partly
+// drained, and has PVCs already gone.
+//
+// Emitted as events as well as prose, because --output=json suppresses raw
+// text and a wrapper needs both answers more than a human does.
+func reportEpilogue(rec *output.Recorder, res drain.Result, selected []inventory.Node,
+	destroyed []string, planned int, context, rerun string) {
+
 	var b strings.Builder
-	fmt.Fprintf(&b, "\ndrain complete — %d node(s) remain cordoned. Uncordon when the\n"+
-		"maintenance work is done:\n", len(nodes))
-	for i := range nodes {
-		fmt.Fprintf(&b, "    kubectl uncordon %s\n", nodes[i].Name)
+
+	if planned > 0 || len(destroyed) > 0 {
+		fmt.Fprintf(&b, "\nPVCs destroyed: %d of %d planned\n", len(destroyed), planned)
+		if n := len(destroyed); n > 0 && n < planned {
+			fmt.Fprintf(&b, "  last one destroyed: %s\n", destroyed[n-1])
+		}
+	}
+	rec.Event(output.Event{
+		Msg: "destruction summary",
+		Attrs: map[string]string{
+			"pvcs_destroyed": fmt.Sprint(len(destroyed)),
+			"pvcs_planned":   fmt.Sprint(planned),
+		},
+	})
+
+	if len(selected) == 0 {
+		rec.Raw(b.String())
+		return
+	}
+
+	ctxFlag := ""
+	if context != "" {
+		ctxFlag = "--context " + context + " "
+	}
+	fmt.Fprintf(&b, "\n%d node(s) are cordoned and out of service. evac never uncordons.\n",
+		len(selected))
+	if res.Failed() {
+		fmt.Fprintf(&b, "A re-run resumes them:\n    %s\n\nOr put them back without draining:\n", rerun)
+	} else {
+		fmt.Fprintf(&b, "Uncordon when the maintenance work is done:\n")
+	}
+	for i := range selected {
+		fmt.Fprintf(&b, "    kubectl %suncordon %s\n", ctxFlag, selected[i].Name)
+		rec.Event(output.Event{
+			Node: selected[i].Name,
+			Msg:  "node left cordoned",
+			Attrs: map[string]string{
+				"uncordon_command": fmt.Sprintf("kubectl %suncordon %s", ctxFlag, selected[i].Name),
+			},
+		})
 	}
 	rec.Raw(b.String())
 }
@@ -389,19 +471,34 @@ func reportedErr(res drain.Result) error {
 	return fmt.Errorf("drain failed")
 }
 
-// rerunCommand reconstructs the invocation to suggest in failure diagnostics,
-// which must be given verbatim including the node file path.
-func rerunCommand(sf selectionFlags, origin string) string {
-	switch {
-	case len(sf.nodes) > 0:
-		return "evac drain --nodes " + strings.Join(sf.nodes, ",")
-	case sf.selector != "":
-		return "evac drain --selector " + sf.selector
-	case sf.file != "":
-		return "evac drain -f " + sf.file
-	case origin != "":
-		return "evac drain -f " + origin
-	default:
-		return "evac drain"
+// rerunCommand builds the command to suggest in failure diagnostics.
+//
+// It pins the cluster and the resolved node list rather than echoing back the
+// flags that were typed, because this command is handed to an operator to
+// paste, possibly hours later and possibly after a kubectx in another pane.
+//
+// --context is included unconditionally, not only when the flag was passed.
+// Without it the command resolves against whatever kubecontext is active at
+// paste time, and pool-style node names collide across clusters — so a command
+// evac itself printed could cordon nodes and delete local PVCs on a cluster
+// the failed drain never touched.
+//
+// The node list is the resolved selection for the same reason. Echoing back
+// --selector would re-derive a different set from live labels, including nodes
+// the first run already drained; echoing back -f would re-read a file that may
+// have been edited since; and echoing back `-f -` produced a command that
+// silently blocks on the keyboard, because the original list was consumed by
+// the run that just failed.
+func rerunCommand(g *globals, context string, nodes []string) string {
+	cmd := "evac drain"
+	if g.kubeconfig != "" {
+		cmd += " --kubeconfig " + g.kubeconfig
 	}
+	if context != "" {
+		cmd += " --context " + context
+	}
+	if len(nodes) > 0 {
+		cmd += " --nodes " + strings.Join(nodes, ",")
+	}
+	return cmd
 }

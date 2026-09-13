@@ -131,7 +131,7 @@ appears, so it cannot cleanly bind and the controller waits instead of wedging.
 | **Never on AWS/EKS** | Detected from node `providerID`, the EBS CSI driver, StorageClass provisioners, or an EKS ARN context name. Drain still works; PVC deletion is off. |
 | **One drain at a time** | A `flock` on `$XDG_RUNTIME_DIR/evac.lock`, falling back to `$TMPDIR` then `/tmp` as `evac-<uid>.lock` — on macOS, where `XDG_RUNTIME_DIR` is normally unset, the fallback is the usual path. `nodes` and `plan` never take it, so you can always look at a cluster mid-drain. |
 | **Idempotent** | No checkpoints. Every operation is convergent and scope is re-derived from live state, so a failed run is recovered by running it again. |
-| **Audited by default** | Every run writes a timestamped `./evac-<context>-<time>.log` in addition to stdout, unless `--no-log-file` is passed or `--log-file` redirects it. `--output=json` emits the same events. |
+| **Audited by default** | Every `drain` writes a timestamped `./evac-<context>-<time>.log` in addition to stdout, unless `--no-log-file` is passed or `--log-file` redirects it. `nodes` and `plan` are read-only and write no log. `--output=json` emits the same events, and needs `--yes` because the plan and confirmation block are not rendered in JSON. |
 
 Preflight blocks the drain on capacity shortfalls, on affinity traps — the case where the
 nodes you selected are the only ones a workload is allowed to run on — and on a selection that

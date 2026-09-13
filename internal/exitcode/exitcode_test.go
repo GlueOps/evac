@@ -53,3 +53,20 @@ func TestOfUnwrapsThroughWrappedErrors(t *testing.T) {
 		t.Errorf("Of(plain) = %d, want %d", got, Error)
 	}
 }
+
+// A deliberate SIGINT must never be reported as the retryable Job timeout.
+// Interrupted is reachable per node, so under --parallel it aggregates against
+// the other nodes' codes, and a wrapper seeing 3 retries a destructive drain
+// the operator stopped on purpose.
+func TestInterruptOutranksTheRetryableJobTimeout(t *testing.T) {
+	t.Parallel()
+	if got := Combine(JobTimeout, Interrupted); got != Interrupted {
+		t.Errorf("Combine(JobTimeout, Interrupted) = %d, want %d", got, Interrupted)
+	}
+	// It must still lose to codes that need a human on a specific node.
+	for _, worse := range []Code{Error, PVCStuck, EvictionTimeout} {
+		if got := Combine(Interrupted, worse); got != worse {
+			t.Errorf("Combine(Interrupted, %d) = %d, want %d", worse, got, worse)
+		}
+	}
+}

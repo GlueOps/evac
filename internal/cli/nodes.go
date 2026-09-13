@@ -30,7 +30,11 @@ Read-only. With -i the same table becomes selectable and the chosen nodes are
 written to a node file that plan and drain read.
 
 Control plane nodes are shown but never selectable: draining them risks etcd
-quorum loss, so they are excluded at every layer.`,
+quorum loss, so evac refuses to drain them at every layer.
+
+They are not otherwise excluded. A schedulable control plane node still
+receives the pods you evict — which is the default on k3s, where the server
+node carries no taint.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			switch sortBy {
@@ -80,8 +84,11 @@ quorum loss, so they are excluded at every layer.`,
 				"  for boot time: it reflects the last Ready flap, not a reboot.\n")
 
 			if cp := inventory.ControlPlaneNames(nodes); len(cp) > 0 {
-				fmt.Fprintf(out, "\n%d control plane node(s) excluded from draining: %s\n",
+				fmt.Fprintf(out, "\n%d control plane node(s) will never be drained: %s\n",
 					len(cp), joinNames(cp))
+				if sched := schedulableControlPlaneNames(nodes); len(sched) > 0 {
+					fmt.Fprintf(out, "  Schedulable, so evicted pods can land there: %s\n", joinNames(sched))
+				}
 			}
 
 			if interactive {
@@ -109,6 +116,18 @@ func joinNames(names []string) string {
 			out += ", "
 		}
 		out += n
+	}
+	return out
+}
+
+// schedulableControlPlaneNames names control-plane nodes that will actually
+// receive evicted pods: untainted and uncordoned, which is the k3s default.
+func schedulableControlPlaneNames(nodes []inventory.Node) []string {
+	var out []string
+	for i := range nodes {
+		if n := &nodes[i]; n.ControlPlane && n.Schedulable && n.Ready {
+			out = append(out, n.Name)
+		}
 	}
 	return out
 }

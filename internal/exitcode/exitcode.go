@@ -57,6 +57,16 @@ func severity(c Code) int {
 		return 70
 	case OK:
 		return 0
+	case Interrupted:
+		// Just above JobTimeout, and below everything that names a specific
+		// broken thing. Interrupted is reachable per node, so under --parallel
+		// a SIGINT could otherwise be outranked by a Job wait timing out
+		// elsewhere and reported as 3 — the one code a wrapper is told it may
+		// retry on a timer, which would retry a drain the operator stopped on
+		// purpose. It stays below PVCStuck and EvictionTimeout because those
+		// point at something the operator has to go and look at, whereas they
+		// already know they pressed Ctrl-C.
+		return 75
 	default:
 		return 50
 	}
@@ -103,4 +113,38 @@ func Of(err error) Code {
 		return e.Code
 	}
 	return Error
+}
+
+// String names a code for humans.
+//
+// A per-node table reading "exit 5" makes the reader go and look the number
+// up, at the moment they can least afford it. The number stays — it is the
+// process contract — but it is no longer the only thing on the line.
+func (c Code) String() string {
+	switch c {
+	case OK:
+		return "drained"
+	case Error:
+		return "failed"
+	case Usage:
+		return "usage error"
+	case JobTimeout:
+		return "timed out waiting on Job pods"
+	case EvictionTimeout:
+		return "eviction timed out (often a PDB stall)"
+	case PVCStuck:
+		return "PVC stuck Terminating"
+	case Preflight:
+		return "preflight failed"
+	case ControlPlane:
+		return "refused: control plane node"
+	case LockHeld:
+		return "another drain holds the lock"
+	case Aborted:
+		return "aborted at the prompt"
+	case Interrupted:
+		return "interrupted"
+	default:
+		return "unknown"
+	}
 }

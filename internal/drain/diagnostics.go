@@ -28,22 +28,44 @@ func (e *Engine) pdbStallDiagnostic(ctx context.Context, node string, pod *corev
 		facts["currentHealthy"] = fmt.Sprint(pdb.Status.CurrentHealthy)
 		facts["desiredHealthy"] = fmt.Sprint(pdb.Status.DesiredHealthy)
 
+		// The three numbers alone describe two opposite situations that call
+		// for opposite responses, and rendering them identically leaves the
+		// reading to an operator at 2am. currentHealthy below desiredHealthy
+		// means replicas are still coming back and waiting genuinely works;
+		// at or above it with no disruptions allowed, the budget cannot be
+		// satisfied at this replica count and will never clear on its own —
+		// so the re-run this block suggests would stall for another full
+		// timeout and fail in exactly the same way.
+		suggested := []string{
+			fmt.Sprintf("kubectl describe pdb -n %s %s", pdb.Namespace, pdb.Name),
+			fmt.Sprintf("kubectl get pods -n %s -o wide", pod.Namespace),
+		}
+		if pdb.Status.DisruptionsAllowed == 0 && pdb.Status.CurrentHealthy >= pdb.Status.DesiredHealthy {
+			detail = append(detail,
+				"  this budget cannot allow a disruption at the current replica count",
+				fmt.Sprintf("  waiting will not clear it, and a re-run stalls for another %s", e.opts.EvictionTimeout),
+				"  raise replicas or relax the budget first, then re-run")
+			suggested = append(suggested,
+				fmt.Sprintf("kubectl patch pdb -n %s %s --type=merge -p '{\"spec\":{\"minAvailable\":%d}}'",
+					pdb.Namespace, pdb.Name, maxInt(int(pdb.Status.DesiredHealthy)-1, 0)))
+		}
+		detail = append(detail, fmt.Sprintf("  %s remains cordoned", node))
+
 		e.rec.Diagnostic(output.Diagnostic{
-			Node:     node,
-			Headline: fmt.Sprintf("eviction timeout after %s", e.opts.EvictionTimeout),
-			Detail:   detail,
-			Facts:    facts,
-			Suggested: []string{
-				fmt.Sprintf("kubectl describe pdb -n %s %s", pdb.Namespace, pdb.Name),
-				fmt.Sprintf("kubectl get pods -n %s -o wide", pod.Namespace),
-			},
-			Rerun: e.rerun,
+			Node:      node,
+			Headline:  fmt.Sprintf("eviction timeout after %s", e.opts.EvictionTimeout),
+			Detail:    detail,
+			Facts:     facts,
+			Suggested: suggested,
+			Rerun:     e.rerun,
 		})
 	} else {
 		e.rec.Diagnostic(output.Diagnostic{
 			Node:     node,
 			Headline: fmt.Sprintf("eviction timeout after %s", e.opts.EvictionTimeout),
-			Detail:   append(detail, "  the eviction API kept returning 429 but no matching PDB could be read back"),
+			Detail: append(detail,
+				"  the eviction API kept returning 429 but no matching PDB could be read back",
+				fmt.Sprintf("  %s remains cordoned", node)),
 			Suggested: []string{
 				fmt.Sprintf("kubectl get pdb -n %s", pod.Namespace),
 				fmt.Sprintf("kubectl describe pod -n %s %s", pod.Namespace, pod.Name),
@@ -54,6 +76,13 @@ func (e *Engine) pdbStallDiagnostic(ctx context.Context, node string, pod *corev
 
 	return exitcode.Wrap(exitcode.EvictionTimeout,
 		fmt.Errorf("eviction of %s/%s timed out after %s", pod.Namespace, pod.Name, e.opts.EvictionTimeout))
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // blockingPDB finds the PDB refusing this pod, re-read live so the numbers in
@@ -126,7 +155,7 @@ func (e *Engine) terminationTimeoutDiagnostic(ctx context.Context, node string, 
 	e.rec.Diagnostic(output.Diagnostic{
 		Node:      node,
 		Headline:  headline,
-		Detail:    detail,
+		Detail:    append(detail, "", fmt.Sprintf("%s remains cordoned.", node)),
 		Suggested: suggested,
 		Rerun:     e.rerun,
 	})

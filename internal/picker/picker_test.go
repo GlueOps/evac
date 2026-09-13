@@ -77,14 +77,22 @@ func TestAlignRowsMarksCordonedAndNotReady(t *testing.T) {
 
 // Silence is worse than an explanation: huh cannot render disabled rows, so
 // the exclusion has to be stated in the title.
+//
+// It must not say only "excluded". This is the screen where the selection is
+// made, and reading "excluded" as "not involved" is what makes ticking every
+// worker look safe — a schedulable control plane node receives every pod
+// evicted off them.
 func TestTitleNamesExcludedControlPlaneNodes(t *testing.T) {
 	t.Parallel()
 	nodes := build(t, node("worker-1", false), node("server-0", true), node("server-1", true))
 
 	got := Title(nodes, Options{Context: "k3d-evac-dev"})
 
-	if !strings.Contains(got, "2 control plane node(s) excluded") {
-		t.Errorf("title does not mention the exclusion:\n%s", got)
+	if !strings.Contains(got, "never drained") {
+		t.Errorf("title does not say these are never drained:\n%s", got)
+	}
+	if !strings.Contains(got, "SCHEDULABLE") || !strings.Contains(got, "evicted pods land there") {
+		t.Errorf("title does not warn that the control plane still receives pods:\n%s", got)
 	}
 	for _, name := range []string{"server-0", "server-1"} {
 		if !strings.Contains(got, name) {
@@ -162,7 +170,13 @@ func TestConfirmingAnEmptySelectionIsTreatedAsCancelled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Cancelled {
-		t.Error("Cancelled = false; an empty selection must not be written as a node file")
+	if got.Cancelled {
+		t.Error("Cancelled = true; confirming with nothing ticked is a deliberate act, not a dismissal")
+	}
+	if !got.ClearedSelection {
+		t.Error("ClearedSelection = false; the caller cannot tell the operator their old node file is still armed")
+	}
+	if len(got.Selected) != 0 {
+		t.Errorf("Selected = %v, want empty", got.Selected)
 	}
 }

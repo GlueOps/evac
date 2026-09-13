@@ -3,6 +3,8 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -31,15 +33,33 @@ func runPicker(cmd *cobra.Command, cl *kube.Client, nodes []inventory.Node, take
 	if err != nil {
 		return exitcode.Wrap(exitcode.Error, err)
 	}
-	if res.Cancelled {
-		fmt.Fprintln(cmd.ErrOrStderr(), "\nNo nodes selected; node file not written.")
-		return nil
-	}
-
 	path := outPath
 	if path == "" {
 		path = nodefile.DefaultPath(cl.Context)
 	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+
+	// "node file not written" is true and reads as "nothing is queued", which
+	// is the opposite of what has happened: an earlier selection is still on
+	// disk and a bare `evac drain` will use it. Say what the state IS.
+	if res.Cancelled || res.ClearedSelection {
+		errOut := cmd.ErrOrStderr()
+		verb := "Cancelled"
+		if res.ClearedSelection {
+			verb = "No nodes selected"
+		}
+		if existing, err := nodefile.Read(path); err == nil && len(existing.Nodes) > 0 {
+			fmt.Fprintf(errOut, "\n%s; nothing written. The existing node file is UNCHANGED and\n"+
+				"still what a bare `evac drain` will use:\n  %s\n  %d node(s): %s\nDelete it to clear the default selection.\n",
+				verb, path, len(existing.Nodes), strings.Join(existing.Nodes, ", "))
+			return nil
+		}
+		fmt.Fprintf(errOut, "\n%s; nothing written, and no node file at\n  %s\n", verb, path)
+		return nil
+	}
+
 	if err := nodefile.Write(path, cl.Context, res.Selected); err != nil {
 		return exitcode.Wrap(exitcode.Error, err)
 	}
@@ -50,7 +70,13 @@ func runPicker(cmd *cobra.Command, cl *kube.Client, nodes []inventory.Node, take
 		fmt.Fprintf(out, "  %s\n", n)
 	}
 	// Naming the next command matters: the whole point of the per-context
-	// default path is that drain can then be run with no arguments.
-	fmt.Fprintf(out, "\nNext:  evac plan     # review\n       evac drain    # execute\n")
+	// default path is that drain can then be run with no arguments. With -o
+	// there is no such default, so the bare commands would read a different
+	// file — an older selection, or none — and the hint has to carry -f.
+	if outPath != "" {
+		fmt.Fprintf(out, "\nNext:  evac plan -f %s     # review\n       evac drain -f %s    # execute\n", path, path)
+	} else {
+		fmt.Fprintf(out, "\nNext:  evac plan     # review\n       evac drain    # execute\n")
+	}
 	return nil
 }

@@ -75,6 +75,26 @@ type Engine struct {
 	// written by one worker and read by another.
 	movedMu sync.Mutex
 	moved   map[string]bool
+
+	// destroyed names every PVC confirmed gone, in the order they went. This
+	// is the only record of what the run actually destroyed: everything else
+	// is a prediction made before the run, and after a failure the first
+	// question is how much is already unrecoverable.
+	destroyedMu sync.Mutex
+	destroyed   []string
+}
+
+// Destroyed returns the PVCs confirmed deleted, in completion order.
+func (e *Engine) Destroyed() []string {
+	e.destroyedMu.Lock()
+	defer e.destroyedMu.Unlock()
+	return append([]string(nil), e.destroyed...)
+}
+
+func (e *Engine) recordDestroyed(namespace, name string) {
+	e.destroyedMu.Lock()
+	defer e.destroyedMu.Unlock()
+	e.destroyed = append(e.destroyed, namespace+"/"+name)
 }
 
 // New builds an Engine.
@@ -613,6 +633,7 @@ func (e *Engine) waitPVCGone(ctx context.Context, phase, node string, t scope.PV
 		got, err := e.client.CoreV1().PersistentVolumeClaims(t.PVC.Namespace).
 			Get(ctx, t.PVC.Name, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
+			e.recordDestroyed(t.PVC.Namespace, t.PVC.Name)
 			e.rec.Event(output.Event{
 				Phase: phase, Node: node, Namespace: t.PVC.Namespace,
 				Kind: "pvc", Name: t.PVC.Name, Msg: "deleted",
@@ -645,6 +666,8 @@ func (e *Engine) waitPVCGone(ctx context.Context, phase, node string, t scope.PV
 					fmt.Sprintf("%s/%s   finalizers: %v", got.Namespace, got.Name, got.Finalizers),
 					"",
 					"Check for lingering pods and VolumeAttachments on the selected nodes.",
+					"",
+					fmt.Sprintf("%s remains cordoned.", node),
 				},
 				Suggested: []string{
 					fmt.Sprintf("kubectl describe pvc -n %s %s", got.Namespace, got.Name),
@@ -719,6 +742,8 @@ func (e *Engine) waitWorkloadReady(ctx context.Context, phase, node string, r cl
 					"A local volume binds only once its pod is scheduled, so a Pending PVC here is",
 					"normal. A Pending *pod* is not — check whether the scheduler has anywhere to",
 					"put it.",
+					"",
+					fmt.Sprintf("%s remains cordoned.", node),
 				},
 				Suggested: []string{
 					fmt.Sprintf("kubectl get pods -n %s -o wide", ns),

@@ -202,6 +202,12 @@ func (s *Scope) ByClass(c classify.Class) []classify.Result {
 	return out
 }
 
+// Evictable counts the pods a drain will move: normal plus fragile, excluding
+// DaemonSets, Jobs and mirror pods, which are never evicted.
+func (s *Scope) Evictable() int {
+	return len(s.ByClass(classify.Normal)) + len(s.ByClass(classify.Fragile))
+}
+
 // Unmanaged returns pods with no controller — permanent losses, listed
 // separately in the plan and labelled as not coming back.
 func (s *Scope) Unmanaged() []classify.Result {

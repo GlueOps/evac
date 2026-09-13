@@ -3,6 +3,7 @@ package render
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/GlueOps/evac/internal/classify"
@@ -269,6 +270,12 @@ func planPreflight(w io.Writer, pf *preflight.Results) {
 func ConfirmationSummary(s *scope.Scope) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "About to drain %d node(s) in %s:\n", len(s.Nodes), s.Snapshot.Context)
+	// Naming them here matters more than anywhere else on the page. The
+	// incident this block exists for was an operator mistaken about *which*
+	// nodes, and the one line they are certain to read is the one above the
+	// prompt. The names appear once more, far above, where the tables have
+	// long since scrolled off.
+	fmt.Fprintf(&b, "    %s\n", confirmNodeNames(s))
 
 	if n := len(s.DeletablePVCs()); n > 0 {
 		fmt.Fprintf(&b, "  %d PVCs DESTROYED\n", n)
@@ -281,9 +288,27 @@ func ConfirmationSummary(s *scope.Scope) string {
 	if n := len(s.DowntimeBearing()); n > 0 {
 		fmt.Fprintf(&b, "  %d single-replica workloads will go down\n", n)
 	}
-	evicted := len(s.ByClass(classify.Normal)) + len(s.ByClass(classify.Fragile))
-	fmt.Fprintf(&b, "  %d pods evicted\n", evicted)
+	fmt.Fprintf(&b, "  %d pods evicted\n", s.Evictable())
+	// Stated before the prompt, not only afterwards. Cordon is one-way and
+	// evac never uncordons, so this is part of what is being approved.
+	fmt.Fprintf(&b, "  all %d node(s) left CORDONED afterwards; evac never uncordons\n", len(s.Nodes))
 	return b.String()
+}
+
+// confirmNodeNames lists the nodes, truncated so a large selection stays one
+// line rather than pushing the counts off the top of the terminal.
+func confirmNodeNames(s *scope.Scope) string {
+	const show = 6
+	names := make([]string, 0, len(s.Nodes))
+	for i := range s.Nodes {
+		names = append(names, s.Nodes[i].Name)
+	}
+	sort.Strings(names)
+	if len(names) > show {
+		return strings.Join(names[:show], ", ") +
+			fmt.Sprintf(", and %d more", len(names)-show)
+	}
+	return strings.Join(names, ", ")
 }
 
 // --- helpers ---------------------------------------------------------------

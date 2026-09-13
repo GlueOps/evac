@@ -214,3 +214,24 @@ func TestDurationFormatting(t *testing.T) {
 		}
 	}
 }
+
+// The confirmation block is the last thing before the prompt, and the incident
+// it exists for was an operator mistaken about *which* nodes. A count is not
+// enough, and the fact that nodes are left cordoned is part of what is being
+// approved rather than something to discover afterwards.
+func TestConfirmationSummaryNamesNodesAndWarnsAboutCordon(t *testing.T) {
+	t.Parallel()
+	sc := buildPlanScope(t, kube.SnapshotFixture{
+		Nodes: []corev1.Node{planNode("agent-0"), planNode("agent-1")},
+		Pods:  []corev1.Pod{planPod("platform", "web", "agent-0", "web")},
+	}, "agent-0")
+
+	got := ConfirmationSummary(sc)
+
+	if !strings.Contains(got, "agent-0") {
+		t.Errorf("summary does not name the node being drained:\n%s", got)
+	}
+	if !strings.Contains(got, "CORDONED") {
+		t.Errorf("summary does not say nodes are left cordoned:\n%s", got)
+	}
+}

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -65,13 +66,14 @@ func (sf *selectionFlags) resolve(cmd *cobra.Command, g *globals, refuseControlP
 	}
 	// Falling back to the default node file is what makes `evac nodes -i`
 	// followed by a bare `evac drain` the common path.
-	if req.Empty() {
+	usedDefault := req.Empty()
+	if usedDefault {
 		req.File = nodefile.DefaultPath(cl.Context)
 	}
 
 	sel, err := selection.Resolve(req, all, refuseControlPlane)
 	if err != nil {
-		return nil, nil, nil, classifySelectionError(err, req.File, req.FileExplicit)
+		return nil, nil, nil, classifySelectionError(err, req.File, usedDefault)
 	}
 	if len(sel.Nodes) == 0 {
 		return nil, nil, nil, exitcode.Wrap(exitcode.Usage, fmt.Errorf("no drainable nodes selected"))
@@ -82,15 +84,29 @@ func (sf *selectionFlags) resolve(cmd *cobra.Command, g *globals, refuseControlP
 }
 
 // classifySelectionError maps selection failures onto evac's exit codes.
-func classifySelectionError(err error, path string, explicit bool) error {
+//
+// usedDefault, not "the operator passed -f": the node-file advice is only true
+// when nothing was selected and the default path was tried. Keying it on the
+// -f flag meant every --nodes and --selector failure — a typo, a selector
+// matching nothing, two selection flags at once — printed "No node selection
+// given and the default node file  was not usable" with an empty path, after
+// the operator had plainly given a selection.
+func classifySelectionError(err error, path string, usedDefault bool) error {
 	var cp *selection.ControlPlaneInFileError
 	if asControlPlaneErr(err, &cp) {
 		return exitcode.Wrap(exitcode.ControlPlane, fmt.Errorf(
 			"%w\n\nevac drains worker nodes only: draining a control plane node risks etcd\nquorum loss. There is no override flag. Remove those lines and re-run", err))
 	}
-	if !explicit {
+	if usedDefault {
+		shown := path
+		if abs, aerr := filepath.Abs(path); aerr == nil {
+			shown = abs
+		}
 		return exitcode.Wrap(exitcode.Usage, fmt.Errorf(
-			"%w\n\nNo node selection given and the default node file %s was not usable.\nRun `evac nodes -i` to choose nodes, or pass --nodes/--selector/-f", err, path))
+			"%w\n\nNo node selection given, and the default node file was not usable:\n  %s\n"+
+				"That path is relative to the current directory — if you ran `evac nodes -i`\n"+
+				"somewhere else, pass -f <that file>.\n"+
+				"Otherwise run `evac nodes -i` to choose nodes, or pass --nodes/--selector/-f", err, shown))
 	}
 	return exitcode.Wrap(exitcode.Usage, err)
 }
