@@ -21,13 +21,14 @@ builds:
       - -X main.commit={{.Commit}}
       - -X main.date={{.Date}}
 
-# Snapshot builds (make snapshot / the rc-build workflow) are not releases and
-# must not look like one. Including the branch makes it obvious which code a
-# tarball came from when several RCs are circulating.
+# Snapshot builds (make snapshot, or the pr-build workflow) are not releases and
+# must not look like one. No "rc" prefix: these are builds of unmerged code that
+# may never be released, and 0.0.0 already says unreleased. The branch is what
+# an operator needs to know when several are circulating.
 snapshot:
   # Branch names contain slashes (feat/evac-v1), which would turn the archive
   # name into a nested path. Flatten them.
-  version_template: '0.0.0-rc.{{ replace .Branch "/" "-" }}.{{ .ShortCommit }}'
+  version_template: '0.0.0-{{ replace .Branch "/" "-" }}.{{ .ShortCommit }}'
 
 archives:
   - formats: [tar.gz]

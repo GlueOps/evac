@@ -1,0 +1,122 @@
+name: pr-build
+
+# Binaries for the code in a pull request, without tagging and without merging.
+#
+# Not "rc": these are builds of unmerged code that may never be released, and
+# calling them release candidates would imply a decision nobody has made.
+#
+# Deliberately NOT a tag push: release-please derives its baseline from tags, so
+# an rc tag risks moving that baseline, and a tag would also cut a real GitHub
+# release. These artifacts live on the workflow run and expire.
+#
+# Runs on every pull request that touches something a binary is built from, so
+# there is always a downloadable build of the code under review without anyone
+# asking for one. A docs-only PR skips it — the binary would be byte-identical
+# to the last one and nobody wants it.
+#
+# workflow_dispatch only appears once this file is on the default branch, so it
+# is the after-merge path; pull_request workflows run from the head branch,
+# which is what makes this work before merging.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or SHA to build (defaults to the selected ref)
+        required: false
+        type: string
+  pull_request:
+    paths:
+      - '**.go'
+      - go.mod
+      - go.sum
+      - Makefile
+      - .goreleaser.yaml
+      - .github/workflows/rc-build.yaml
+
+permissions:
+  contents: read
+  # To post the one comment that links the artifacts. Without it the build is
+  # three clicks deep under Checks and nobody finds it.
+  pull-requests: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.ref || github.event.pull_request.head.sha || github.ref }}
+          # goreleaser derives the snapshot version from git history.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+
+      # --snapshot builds without a tag; --skip=publish keeps it off GitHub
+      # Releases entirely, so nothing here can be mistaken for a real release.
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+        with:
+          version: '~> v2'
+          args: release --snapshot --clean --skip=publish
+
+      - name: what was built
+        run: |
+          echo "### PR build" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ls -1 dist/*.tar.gz dist/checksums.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "Download from the **Artifacts** section of this run." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "These are unreleased snapshot builds: \`evac version\` reports the" >> "$GITHUB_STEP_SUMMARY"
+          echo "snapshot string, not a release tag, and they expire in 7 days." >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: evac-pr-${{ github.event.pull_request.number || github.ref_name }}-${{ github.sha }}
+          path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+          # Short: these are throwaway builds of unmerged code, and one lands
+          # on every push to every PR.
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: link the build from the pull request
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const marker = '<!-- evac-pr-build -->';
+            const body = [
+              marker,
+              '**PR build** — binaries for `' + context.payload.pull_request.head.sha.slice(0, 7) + '`',
+              '',
+              'linux and darwin, amd64 and arm64, plus checksums:',
+              '',
+              '[Download from the run](' + context.payload.repository.html_url +
+                '/actions/runs/' + context.runId + ')',
+              '',
+              'Unreleased build of unmerged code — `evac version` reports the branch and',
+              'commit, not a release tag. Expires in 7 days.',
+            ].join('\n');
+
+            // Edit the existing comment rather than adding one per push.
+            const {data: comments} = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number, per_page: 100,
+            });
+            const mine = comments.find(c => c.body && c.body.includes(marker));
+            if (mine) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: mine.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number, body,
+              });
+            }
