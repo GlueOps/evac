@@ -54,7 +54,7 @@ quorum loss, so they are excluded at every layer.`,
 				return exitcode.Wrap(exitcode.Error, fmt.Errorf("cluster %s reports no nodes", cl.Target()))
 			}
 
-			// §3.1's edge case, worth its own message: a single-node install is
+			// An edge case worth its own message: a single-node install is
 			// both control plane and worker, so nothing is drainable and an
 			// empty selection would be misleading.
 			if inventory.SingleNodeCluster(nodes) {

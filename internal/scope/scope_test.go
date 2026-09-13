@@ -115,7 +115,7 @@ func TestCompletedJobPodsAreNotWaitedOn(t *testing.T) {
 	}
 }
 
-// §5: discovery is scoped to the target pod set, never swept by node. Sweeping
+// Discovery is scoped to the target pod set, never swept by node. Sweeping
 // by node picks up claims belonging to pods that are never evicted, and those
 // pods keep running with a PVC stuck Terminating underneath them.
 func TestPVCDiscoveryIgnoresClaimsOfExcludedPods(t *testing.T) {
@@ -163,7 +163,7 @@ func TestScopeIsLimitedToSelectedNodes(t *testing.T) {
 	}
 }
 
-// §7: a PVC already carrying a deletionTimestamp is unfinished work from a
+// A PVC already carrying a deletionTimestamp is unfinished work from a
 // previous run, and the delete is skipped rather than repeated.
 func TestPVCAlreadyDeletingIsMarkedAsResuming(t *testing.T) {
 	t.Parallel()

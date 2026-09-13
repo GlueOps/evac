@@ -91,10 +91,10 @@ func matchLabels(l map[string]string) *metav1.LabelSelector {
 
 // --- replica resolution ----------------------------------------------------
 
-// The mistake §5 names explicitly. Mid-rollout the old ReplicaSet is scaled to
-// 1 while the Deployment still wants 3. Reading the ReplicaSet would call this
-// pod fragile and delete it outright, at the exact moment a drain is riskiest.
-// The fixtures must disagree or the test cannot catch the bug.
+// The mistake worth naming explicitly. Mid-rollout the old ReplicaSet is
+// scaled to 1 while the Deployment still wants 3. Reading the ReplicaSet would
+// call this pod fragile and delete it outright, at the exact moment a drain is
+// riskiest. The fixtures must disagree or the test cannot catch the bug.
 func TestReplicaCountComesFromDeploymentNotReplicaSetMidRollout(t *testing.T) {
 	c := New(Inputs{
 		ReplicaSets: []appsv1.ReplicaSet{rs("app", "web-old", 1, "web")},
@@ -148,7 +148,7 @@ func TestSingleReplicaStatefulSetIsFragile(t *testing.T) {
 		t.Errorf("reasons = %v, want to include %q", got.FragileReasons, FragileSingleReplica)
 	}
 	// This is the population that actually takes downtime: one replica held by
-	// a PDB that allows zero disruptions. §5 requires it be surfaced separately.
+	// a PDB that allows zero disruptions. It is surfaced separately.
 	if !got.BearsDowntime() {
 		t.Error("BearsDowntime() = false, want true (single replica with a matching PDB)")
 	}
@@ -193,8 +193,8 @@ func TestUnknownControllerKindDoesNotTriggerSingleReplica(t *testing.T) {
 
 // --- PDB matching ----------------------------------------------------------
 
-// The trap §5 names: an empty selector reads like "matches nothing" and in fact
-// matches every pod in the namespace.
+// The trap worth naming: an empty selector reads like "matches nothing" and
+// in fact matches every pod in the namespace.
 func TestEmptyPDBSelectorMatchesEveryPodInItsNamespace(t *testing.T) {
 	c := New(Inputs{
 		StatefulSets: []appsv1.StatefulSet{sts("app", "web", 3)},
@@ -460,7 +460,7 @@ func TestUnparseablePDBSelectorDoesNotMatch(t *testing.T) {
 
 // The ReplicaSet names a Deployment that is not in the snapshot — RBAC gap, or
 // deleted mid-drain. The replica count is then unknowable, and this line is one
-// edit away from §5's named catastrophe: falling back to rs.Spec.Replicas here
+// edit away from the mid-rollout bug: falling back to rs.Spec.Replicas here
 // would make a mid-rollout ReplicaSet at 1 look fragile and delete it outright.
 func TestMissingDeploymentLeavesReplicaCountUnknown(t *testing.T) {
 	t.Parallel()

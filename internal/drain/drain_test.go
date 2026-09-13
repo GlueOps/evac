@@ -173,7 +173,7 @@ func TestCordonSkipsNodesAlreadyUnschedulable(t *testing.T) {
 		}
 	}
 	if patches != 1 {
-		t.Errorf("issued %d node patches, want 1 — cordoning an already-cordoned node is a no-op (§7)", patches)
+		t.Errorf("issued %d node patches, want 1 — cordoning an already-cordoned node is a no-op", patches)
 	}
 	if out := h.output(); !strings.Contains(out, "already cordoned") {
 		t.Errorf("the skip was not reported to the operator:\n%s", out)
@@ -233,7 +233,7 @@ func TestRefusedPVCIsKeptAndTheReasonIsReported(t *testing.T) {
 	}
 }
 
-// §7: convergent. Re-issuing a delete against a claim already marked achieves
+// Convergent: re-issuing a delete against a claim already marked achieves
 // nothing, so a re-run skips straight to eviction.
 func TestPVCAlreadyMarkedForDeletionIsNotDeletedAgain(t *testing.T) {
 	t.Parallel()
@@ -279,7 +279,7 @@ func TestLocalPVCIsDeleted(t *testing.T) {
 }
 
 // A claim that vanished between the snapshot and the delete is not an error:
-// every operation is meant to be convergent (§7).
+// every operation is meant to be convergent.
 func TestDeletingAnAlreadyGonePVCIsNotAnError(t *testing.T) {
 	t.Parallel()
 	pvc, pv := localPair("app", "data-0", "pv-a")
@@ -488,7 +488,7 @@ func evictionDeletesPod(t *testing.T, h *harness, ns, name string) {
 	})
 }
 
-// §5 phase 2: delete the PVC FIRST, then evict.
+// Phase 2: delete the PVC FIRST, then evict.
 //
 // This pins the call contract only — it does NOT prove the ordering avoids the
 // deadlock, which is TestPhase2OrderingMovesLocalVolumeToAnotherNode's job
@@ -534,7 +534,7 @@ func TestPhase2DeletesThePVCBeforeEvicting(t *testing.T) {
 	}
 }
 
-// §5 phase 3: fragile pods are DELETED, never evicted. A single-replica
+// Phase 3: fragile pods are DELETED, never evicted. A single-replica
 // workload with minAvailable:1 allows zero disruptions, so the eviction API
 // would refuse it forever — not slowly, never.
 func TestPhase3DeletesFragilePodsRatherThanEvicting(t *testing.T) {
@@ -574,7 +574,7 @@ func TestPhase3DeletesFragilePodsRatherThanEvicting(t *testing.T) {
 	if !sawDelete {
 		t.Fatalf("no pod delete was issued; actions were %v", h.actions())
 	}
-	// §5: the PVC-first ordering matters MORE here, not less — a direct delete
+	// The PVC-first ordering matters MORE here, not less — a direct delete
 	// removes the pod object immediately, so the controller recreates faster
 	// and the race window is tighter.
 	if pvcDelete < 0 || pvcDelete > podDelete {
@@ -582,7 +582,7 @@ func TestPhase3DeletesFragilePodsRatherThanEvicting(t *testing.T) {
 	}
 }
 
-// §5: the tool must never patch finalizers off a PVC. Stripping pvc-protection
+// The tool must never patch finalizers off a PVC. Stripping pvc-protection
 // while a VolumeAttachment still exists is how a volume ends up attached to a
 // node with no Kubernetes object tracking it.
 func TestNoPatchOrUpdateIsEverIssuedAgainstAPVC(t *testing.T) {
@@ -646,7 +646,7 @@ func TestPVCReplacedSinceThePlanIsNotDeleted(t *testing.T) {
 }
 
 // A conflict on the POD delete is the opposite case: the pod this call was
-// about is already gone, which is what the call wanted. §7 convergence.
+// about is already gone, which is what the call wanted. Convergent.
 func TestPodReplacedSinceThePlanIsTreatedAsAlreadyGone(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, kube.SnapshotFixture{
@@ -713,7 +713,7 @@ func TestPollNodeReadsEveryPage(t *testing.T) {
 
 // Phase 1 cordons every selected node before any eviction, so a serial run that
 // stops at node 2 of 5 has still taken all five out of service. Cordon is
-// one-way (§1), so the untouched remainder has to be reported or the operator
+// one-way, so the untouched remainder has to be reported or the operator
 // does not know what is still unschedulable.
 func TestNodesCordonedButNeverAttemptedAreReported(t *testing.T) {
 	t.Parallel()
@@ -767,7 +767,7 @@ func TestSerialFailureRecordsTheUntouchedRemainder(t *testing.T) {
 
 // --- phase 4 exit codes ----------------------------------------------------
 
-// Exit 3 is the only code §9 tells a wrapper it may retry on a timer, and that
+// Exit 3 is the only code a wrapper may retry on a timer, and that
 // is honest only for Job pods, which finish by themselves. A pod that arrived
 // after the snapshot — one naming its node directly, which the cordon does not
 // stop — will still be there on the next attempt, so reporting 3 sends a

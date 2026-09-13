@@ -24,7 +24,7 @@ import (
 
 func ptr[T any](v T) *T { return &v }
 
-// TestPhase2OrderingMovesLocalVolumeToAnotherNode is the check §5 called for
+// TestPhase2OrderingMovesLocalVolumeToAnotherNode is the check that was needed
 // before this tool could be trusted: delete a live StatefulSet PVC in the
 // specified order and confirm the replacement comes up with a fresh volume on a
 // different node rather than wedging Pending forever.
@@ -110,7 +110,7 @@ func TestPhase2OrderingMovesLocalVolumeToAnotherNode(t *testing.T) {
 	t.Cleanup(func() { uncordon(t, originalNode) })
 }
 
-// TestRerunIsConvergent checks §7: running a second time against an
+// TestRerunIsConvergent checks that running a second time against an
 // already-drained node must succeed and change nothing, rather than erroring on
 // objects that are already gone.
 func TestRerunIsConvergent(t *testing.T) {

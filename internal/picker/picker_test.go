@@ -75,8 +75,8 @@ func TestAlignRowsMarksCordonedAndNotReady(t *testing.T) {
 	}
 }
 
-// §3.1's reasoning is that silence is worse than an explanation: huh cannot
-// render disabled rows, so the exclusion has to be stated in the title.
+// Silence is worse than an explanation: huh cannot render disabled rows, so
+// the exclusion has to be stated in the title.
 func TestTitleNamesExcludedControlPlaneNodes(t *testing.T) {
 	t.Parallel()
 	nodes := build(t, node("worker-1", false), node("server-0", true), node("server-1", true))

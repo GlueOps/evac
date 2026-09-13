@@ -1,4 +1,4 @@
-// Package classify implements §5 phase 1b: sorting the pods on the selected
+// Package classify implements phase 1b: sorting the pods on the selected
 // nodes into the three buckets that decide how each one is removed.
 //
 // This is pure logic over a snapshot. It issues no API calls, which is what
@@ -31,7 +31,7 @@ type Inputs struct {
 	ReplicationControllers []corev1.ReplicationController
 }
 
-// Class is the bucket a pod falls into. §5 defines exactly three.
+// Class is the bucket a pod falls into.
 type Class string
 
 const (
@@ -96,8 +96,8 @@ type Result struct {
 	MatchingPDBs []string
 }
 
-// Unmanaged reports whether nothing will recreate this pod. §5 requires these
-// be listed separately in plan and run output, labelled as permanent losses.
+// Unmanaged reports whether nothing will recreate this pod. These are listed
+// separately in plan and run output, labelled as permanent losses.
 func (r Result) Unmanaged() bool {
 	return r.hasFragileReason(FragileUnmanaged)
 }
@@ -105,7 +105,7 @@ func (r Result) Unmanaged() bool {
 // BearsDowntime distinguishes the two populations inside the fragile bucket.
 // A pod that is fragile only because no PDB selects it would have evicted
 // cleanly; a single-replica workload held by a restrictive PDB is the one that
-// actually goes down. §5 requires that second group be surfaced separately.
+// actually goes down. That second group is surfaced separately.
 func (r Result) BearsDowntime() bool {
 	return r.Class == Fragile && r.hasFragileReason(FragileSingleReplica) && len(r.MatchingPDBs) > 0
 }
@@ -207,7 +207,7 @@ func (c *Classifier) Classify(pod *corev1.Pod) Result {
 	r.Replicas = ctrl.replicas
 	r.MatchingPDBs = c.matchingPDBs(pod)
 
-	// §5: fragile if the owner wants one replica, or nothing selects it with a
+	// Fragile if the owner wants one replica, or nothing selects it with a
 	// PDB, or it has no controller at all. These are independent tests and a
 	// pod can trip several; all are recorded so the operator sees why.
 	if !ctrl.found {
@@ -239,8 +239,7 @@ func (c *Classifier) exclusionFor(pod *corev1.Pod) (ExclusionReason, bool) {
 		switch ref.Kind {
 		case "DaemonSet":
 			// Evicted DaemonSet pods return immediately: the controller
-			// tolerates the unschedulable taint. §5 makes ignoring them
-			// unconditional.
+			// tolerates the unschedulable taint. Ignoring them is unconditional.
 			return ExcludedDaemonSet, true
 		case "Job":
 			// Job and CronJob pods finish on their own; cordon stops new ones
@@ -258,10 +257,10 @@ func (c *Classifier) exclusionFor(pod *corev1.Pod) (ExclusionReason, bool) {
 //
 // Deleting a local-path PVC spawns a short-lived pod on the node to remove the
 // directory. It has no controller owner and sets spec.nodeName directly, which
-// makes it look exactly like an unmanaged pod under §5's rules — so on a re-run
-// (§7), where classification happens fresh against live state, one of these
-// caught mid-flight would be reported to the operator as a permanent pod loss
-// and then deleted in phase 3.
+// makes it look exactly like an unmanaged pod — so on a re-run, where
+// classification happens fresh against live state, one of these caught
+// mid-flight would be reported to the operator as a permanent pod loss and
+// then deleted in phase 3.
 //
 // The provisioner does not label these, so the name prefix is the only durable
 // signal; it is required to coincide with having no controller and a Never
@@ -272,7 +271,7 @@ func isStorageHelper(pod *corev1.Pod) bool {
 		pod.Spec.RestartPolicy == corev1.RestartPolicyNever
 }
 
-// matchingPDBs implements §5's "has no PDB" test.
+// matchingPDBs implements the "has no PDB" test.
 //
 // This is not a lookup by name: every PDB in the pod's *own* namespace has its
 // selector evaluated against the pod's labels. A PDB in another namespace never
@@ -306,7 +305,7 @@ type controller struct {
 }
 
 // resolveController walks to the top controller and reads its desired replica
-// count. §5 spells out that this is one hop for some kinds and two for others.
+// count. That is one hop for some kinds and two for others.
 //
 // The count is always spec.replicas, never status.readyReplicas: a 3-replica
 // workload with two pods temporarily unhealthy is not a single-replica

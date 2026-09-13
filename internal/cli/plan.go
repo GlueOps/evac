@@ -34,7 +34,7 @@ func (sf *selectionFlags) register(cmd *cobra.Command) {
 // resolve loads the cluster, builds the inventory, and turns the flags into a
 // concrete node set.
 //
-// refuseControlPlane implements §3.1's split: a node file naming a control
+// refuseControlPlane splits the two behaviours: a node file naming a control
 // plane node is refused outright, because the file is hand-editable and the
 // check cannot live only in the selection path.
 func (sf *selectionFlags) resolve(cmd *cobra.Command, g *globals, refuseControlPlane bool) (*kube.Client, *kube.Snapshot, *selection.Result, error) {
@@ -81,7 +81,7 @@ func (sf *selectionFlags) resolve(cmd *cobra.Command, g *globals, refuseControlP
 	return cl, snap, sel, nil
 }
 
-// classifySelectionError maps selection failures onto §9's exit codes.
+// classifySelectionError maps selection failures onto evac's exit codes.
 func classifySelectionError(err error, path string, explicit bool) error {
 	var cp *selection.ControlPlaneInFileError
 	if asControlPlaneErr(err, &cp) {
@@ -128,9 +128,9 @@ maintenance window or attaching to a change ticket.`,
 				return usageErr("--brief and --full are mutually exclusive")
 			}
 
-			// Read-only: §3.1's file refusal does not apply, and §6's lock is
-			// never taken — an operator must always be able to look at a
-			// cluster while a drain is running.
+			// Read-only: the control-plane file refusal does not apply, and the
+			// lock is never taken — an operator must always be able to look at
+			// a cluster while a drain is running.
 			cl, snap, sel, err := sf.resolve(cmd, g, false)
 			if err != nil {
 				return err

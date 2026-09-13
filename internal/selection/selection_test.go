@@ -145,8 +145,8 @@ func writeNodeFile(t *testing.T, lines ...string) string {
 	return path
 }
 
-// The layer that matters: the node file is hand-editable, so §3.1's check
-// cannot live only in the selection path. Flags filter and report; a file
+// The layer that matters: the node file is hand-editable, so the control-plane
+// check cannot live only in the selection path. Flags filter and report; a file
 // refuses, because someone typed that name deliberately.
 func TestNodeFileNamingControlPlaneIsRefusedOutright(t *testing.T) {
 	t.Parallel()
@@ -200,7 +200,7 @@ func TestNoSelectionAtAllIsAnError(t *testing.T) {
 		t.Fatal("Empty() = false for a blank request")
 	}
 	if _, err := Resolve(req, all(t), false); err == nil {
-		t.Error("Resolve succeeded with no selection; §1 requires the operator choose targets")
+		t.Error("Resolve succeeded with no selection; evac has no default target set — the operator must choose")
 	}
 }
 

@@ -9,8 +9,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// paginate is the reason §3's "fixed small number of list calls" is safe on a
-// large cluster: client-go does not paginate List() itself, so without this a
+// paginate is the reason a fixed number of list calls is safe on a large
+// cluster: client-go does not paginate List() itself, so without this a
 // cluster with thousands of pods returns one enormous response.
 
 func TestPaginateWalksEveryPage(t *testing.T) {

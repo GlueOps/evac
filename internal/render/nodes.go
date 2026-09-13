@@ -12,7 +12,7 @@ import (
 	"github.com/GlueOps/evac/internal/inventory"
 )
 
-// NodeTableOptions carries §3's label display policy and sort choice.
+// NodeTableOptions carries the label display policy and sort choice.
 type NodeTableOptions struct {
 	// LabelColumns promotes specific labels to their own columns, mirroring
 	// `kubectl get nodes -L` so the muscle memory carries over.
@@ -25,7 +25,7 @@ type NodeTableOptions struct {
 	Width int
 }
 
-// NodeTable renders the §3 inventory.
+// NodeTable renders the node inventory.
 //
 // Control-plane nodes are shown rather than hidden: an operator who cannot find
 // a node will go looking, and silence is worse than an explanation. They are

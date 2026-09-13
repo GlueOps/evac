@@ -26,7 +26,7 @@ import (
 //
 // Everything else in this package calls the packages directly, which leaves the
 // entire CLI layer — flag parsing, the confirmation prompt, the lock, and every
-// exit code — unexercised. §9 gives those codes distinct meanings specifically
+// exit code — unexercised. Those codes carry distinct meanings specifically
 // so a wrapper can branch on them, which makes them part of the contract rather
 // than an implementation detail.
 
@@ -149,7 +149,7 @@ func TestUsageErrors(t *testing.T) {
 	}
 }
 
-// §8: if stdin is not a TTY and --yes was not passed, fail rather than
+// If stdin is not a TTY and --yes was not passed, fail rather than
 // proceeding or hanging on a prompt nobody can answer. Hanging would be the
 // worse outcome in a pipeline, so the test also bounds the time.
 func TestNonInteractiveDrainRefusesWithoutYes(t *testing.T) {
@@ -173,7 +173,7 @@ func TestNonInteractiveDrainRefusesWithoutYes(t *testing.T) {
 
 // --- refusals --------------------------------------------------------------
 
-// §3.1's layer that matters: the node file is hand-editable, so a control plane
+// The layer that matters: the node file is hand-editable, so a control plane
 // node named there is refused outright rather than silently filtered.
 func TestControlPlaneInNodeFileExitsSeven(t *testing.T) {
 	cp := controlPlaneNodeName(t)
@@ -194,7 +194,7 @@ func TestControlPlaneInNodeFileExitsSeven(t *testing.T) {
 	}
 }
 
-// §6: one drain at a time. The lock is taken here in-process against a private
+// One drain at a time. The lock is taken here in-process against a private
 // path, and the binary is pointed at the same one, so the contention is
 // deterministic rather than a race between two real drains.
 func TestSecondDrainExitsEight(t *testing.T) {
@@ -216,7 +216,7 @@ func TestSecondDrainExitsEight(t *testing.T) {
 	}
 }
 
-// §8: default to no. Answering anything other than yes must abort before a
+// Default to no. Answering anything other than yes must abort before a
 // single node is cordoned.
 //
 // This needs a real terminal, because the non-TTY path is a different branch
@@ -314,15 +314,15 @@ func cordoned(t *testing.T, name string) bool {
 	return n.Spec.Unschedulable
 }
 
-// TestPipedNodeListStillPromptsOnTheTerminal covers the workflow README and
-// SPEC §2 both advertise:
+// TestPipedNodeListStillPromptsOnTheTerminal covers the workflow the README
+// advertises:
 //
 //	kubectl get nodes -l pool=a -o name | evac drain -f -
 //
 // It used to fail unconditionally. The node list consumes stdin, so the
 // confirmation had nothing to read, and the only way through was --yes — which
 // turns the documented path into one that skips confirmation on a command that
-// destroys data. §8 keeps those two apart deliberately.
+// destroys data. Those two are kept apart deliberately.
 //
 // The prompt now reads the controlling terminal, so the pipeline works and the
 // operator still confirms. Answering "n" must abort without cordoning.

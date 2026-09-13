@@ -30,7 +30,7 @@ type Options struct {
 	Now func() time.Time
 }
 
-// Recorder fans events out to the sinks §9 requires.
+// Recorder fans events out to stdout, the log file and the JSON stream.
 //
 // All writes go through a single goroutine rather than a mutex. A mutex would
 // be held across three separate writes — stdout, the file, possibly JSON — so
@@ -112,8 +112,8 @@ func New(opts Options) (*Recorder, error) {
 	return r, nil
 }
 
-// LogPath is the absolute path of the audit file, or "" when disabled. §9
-// requires printing it at both start and end.
+// LogPath is the absolute path of the audit file, or "" when disabled. Callers
+// print it at both the start and the end of a run.
 func (r *Recorder) LogPath() string { return r.filePath }
 
 func defaultLogPath(context string, now time.Time) string {
@@ -194,7 +194,7 @@ func (r *Recorder) Event(e Event) {
 	r.send(payload{event: &e})
 }
 
-// Diagnostic records a §5 error block.
+// Diagnostic records an error block.
 func (r *Recorder) Diagnostic(d Diagnostic) {
 	if d.Time.IsZero() {
 		d.Time = r.now()
@@ -271,7 +271,7 @@ func (r *Recorder) Close() error {
 
 // Progress sets the transient status line shown during waits.
 //
-// It never becomes an event: §9 allows carriage returns on a terminal but the
+// It never becomes an event: carriage returns are fine on a terminal but the
 // log file and the JSON stream must not contain them. When stdout is not a
 // terminal this is a no-op.
 //

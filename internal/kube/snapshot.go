@@ -16,17 +16,16 @@ import (
 
 // listPageSize bounds each list response. client-go does not paginate List()
 // on its own, so without this a cluster with thousands of pods returns one
-// enormous response. §3's "fixed small number of list calls" means a fixed
-// number of *paginated* calls: the call count per resource type stays constant,
-// only the page count grows with the cluster.
+// enormous response. The number of distinct List operations stays fixed
+// either way; only the page count grows with the cluster.
 const listPageSize = 500
 
 // Snapshot is the cluster state every command reads from. It is taken once and
-// never refreshed: §4 makes staleness explicit to the operator, and §7 requires
-// that scope be re-derived from live state on each run rather than cached
-// across runs.
+// never refreshed: every command that renders it prints when it was taken, and
+// scope is re-derived from live state on each run rather than cached across
+// runs.
 //
-// Inventory covers §3's table. Full adds what the §5 guards and §8 preflight
+// Inventory covers the node table. Full adds what the PVC guards and preflight
 // need. Nothing in the tool may query per node or per pod.
 type Snapshot struct {
 	TakenAt time.Time
@@ -42,11 +41,11 @@ type Snapshot struct {
 	CSIDrivers     []storagev1.CSIDriver
 	PDBs           []policyv1.PodDisruptionBudget
 
-	// Workload owners, needed to resolve replica counts for §5's fragile test.
+	// Workload owners, needed to resolve replica counts for the fragile test.
 	// These are listed rather than fetched per pod: walking ownerReferences with
-	// a Get per hop would be a per-pod query, which §3 forbids. DaemonSets and
-	// Jobs are deliberately absent — those are identified by ownerReference kind
-	// alone and need no lookup.
+	// a Get per hop would be a per-pod query, which this tool never issues.
+	// DaemonSets and Jobs are deliberately absent — identified by ownerReference
+	// kind alone, needing no lookup.
 	ReplicaSets            []appsv1.ReplicaSet
 	Deployments            []appsv1.Deployment
 	StatefulSets           []appsv1.StatefulSet
@@ -58,7 +57,7 @@ type Snapshot struct {
 // Full reports whether the guard and preflight inputs were collected.
 func (s *Snapshot) Full() bool { return s.full }
 
-// Inventory takes the three-call snapshot §3 specifies for the node table.
+// Inventory takes the three-call snapshot the node table needs.
 func (c *Client) Inventory(ctx context.Context) (*Snapshot, error) {
 	s := &Snapshot{TakenAt: time.Now().UTC(), Context: c.Context}
 	err := runParallel(
@@ -72,8 +71,8 @@ func (c *Client) Inventory(ctx context.Context) (*Snapshot, error) {
 	return s, nil
 }
 
-// FullSnapshot adds the inputs §5's volume-source guard, provider detection and
-// §5's fragile classification need. Still a fixed number of list calls.
+// FullSnapshot adds the inputs the volume-source guard, provider detection and
+// fragile classification need. Still a fixed number of list calls.
 func (c *Client) FullSnapshot(ctx context.Context) (*Snapshot, error) {
 	s := &Snapshot{TakenAt: time.Now().UTC(), Context: c.Context, full: true}
 	err := runParallel(
@@ -165,7 +164,7 @@ func (c *Client) listNodes(ctx context.Context) ([]corev1.Node, error) {
 	})
 }
 
-// listPods lists across all namespaces. §5 operates on whatever is on the
+// listPods lists across all namespaces. A drain operates on whatever is on the
 // selected nodes regardless of namespace, so there is no namespace filter
 // anywhere in this tool.
 func (c *Client) listPods(ctx context.Context) ([]corev1.Pod, error) {

@@ -45,8 +45,8 @@ type PVCTarget struct {
 	// Decision is the per-PVC volume-source verdict.
 	Decision guard.Decision
 	// AlreadyDeleting is true when the PVC already carries a deletionTimestamp.
-	// §7 treats that as self-evidently unfinished work from a previous run: the
-	// delete is skipped and the flow proceeds straight to eviction.
+	// That is self-evidently unfinished work from a previous run: the delete is
+	// skipped and the flow proceeds straight to eviction.
 	AlreadyDeleting bool
 }
 
@@ -202,8 +202,8 @@ func (s *Scope) ByClass(c classify.Class) []classify.Result {
 	return out
 }
 
-// Unmanaged returns pods with no controller — permanent losses, which §8
-// requires be listed separately and labelled as not coming back.
+// Unmanaged returns pods with no controller — permanent losses, listed
+// separately in the plan and labelled as not coming back.
 func (s *Scope) Unmanaged() []classify.Result {
 	var out []classify.Result
 	for _, r := range s.Pods {
@@ -238,7 +238,7 @@ func (s *Scope) DeletablePVCs() []PVCTarget {
 	return out
 }
 
-// NamespaceSummary is the §8 blast radius: the inverse query, which is what a
+// NamespaceSummary is the blast radius: the inverse query, which is what a
 // reviewer actually wants to see.
 type NamespaceSummary struct {
 	Namespace string
@@ -284,8 +284,8 @@ func (s *Scope) ByNamespace() []NamespaceSummary {
 //
 // Evicting a pod there sets a deletion timestamp, but nothing terminates the
 // container because the kubelet that would do it is not answering — so the
-// eviction never completes on its own. §8 flags these prominently; it is a
-// warning rather than an error, since a broken node is a legitimate reason to
+// eviction never completes on its own. The plan flags these prominently; it is
+// a warning rather than an error, since a broken node is a legitimate reason to
 // drain.
 func (s *Scope) NotReadyNodes() []inventory.Node {
 	var out []inventory.Node

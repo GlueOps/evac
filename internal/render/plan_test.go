@@ -93,7 +93,7 @@ func renderPlan(t *testing.T, sc *scope.Scope, opts PlanOptions) string {
 	return buf.String()
 }
 
-// §8's ordering is the substance: PVC destruction is the only irreversible part
+// The ordering is the substance: PVC destruction is the only irreversible part
 // of the operation, so it must appear above pod counts and capacity math. An
 // operator scanning quickly has to hit the permanent losses first.
 func TestPVCsToBeDestroyedLeadTheOutput(t *testing.T) {
@@ -123,7 +123,7 @@ func TestPVCsToBeDestroyedLeadTheOutput(t *testing.T) {
 	}
 }
 
-// §8: per-PVC keeps are never reported — they are not a loss and do not need
+// Per-PVC keeps are never reported — they are not a loss and do not need
 // review — but a cluster-wide suppression must be stated, with its signal.
 func TestGuardNoteAppearsOnlyWhenSuppressionIsClusterWide(t *testing.T) {
 	t.Parallel()
@@ -158,7 +158,7 @@ func TestGuardNoteAppearsOnlyWhenSuppressionIsClusterWide(t *testing.T) {
 	})
 }
 
-// §8 requires unmanaged pods be listed separately and labelled as permanent.
+// Unmanaged pods are listed separately and labelled as permanent.
 func TestUnmanagedPodsAreListedAsPermanentLosses(t *testing.T) {
 	t.Parallel()
 	sc := buildPlanScope(t, kube.SnapshotFixture{
@@ -176,7 +176,8 @@ func TestUnmanagedPodsAreListedAsPermanentLosses(t *testing.T) {
 	}
 }
 
-// Two hundred rows is not readable; §8 collapses above a threshold and says so.
+// Two hundred rows is not readable; the plan collapses above a threshold and
+// says so.
 func TestLongPVCListCollapsesAndSaysHowToExpand(t *testing.T) {
 	t.Parallel()
 	fx := kube.SnapshotFixture{
@@ -269,7 +270,7 @@ func TestConfirmationSummaryExplainsZeroWhenSuppressed(t *testing.T) {
 	}
 }
 
-// §7's PV-side discovery surfaces work no pod points at any more.
+// PV-side discovery surfaces work no pod points at any more.
 func TestLeftoversFromAnEarlierRunAreReported(t *testing.T) {
 	t.Parallel()
 	now := metav1.Now()

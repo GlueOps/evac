@@ -1,8 +1,8 @@
 // Package selection resolves an operator's node choice into a concrete set.
 //
-// §1 is emphatic that the operator decides targets: there are no defaults, no
-// automatic targeting and no "all nodes" fallback. If nothing is given, the
-// caller prints the inventory and exits.
+// The operator decides targets: there are no defaults, no automatic targeting
+// and no "all nodes" fallback. If nothing is given, the caller prints the
+// inventory and exits.
 package selection
 
 import (
@@ -52,8 +52,8 @@ type Result struct {
 	Origin string
 
 	// DroppedControlPlane names control-plane nodes removed from a flag or
-	// selector match. §3.1 requires reporting what was dropped and why rather
-	// than silently shrinking the set.
+	// selector match. What was dropped and why is reported rather than
+	// silently shrinking the set.
 	DroppedControlPlane []Dropped
 	// NotFound names requested nodes that do not exist in the cluster.
 	NotFound []string
@@ -87,7 +87,7 @@ func (e *ControlPlaneInFileError) Error() string {
 
 // Resolve turns a Request into a concrete node set.
 //
-// refuseControlPlane selects the §3.1 behaviour for file input: drain passes
+// refuseControlPlane selects the behaviour for file input: drain passes
 // true so a hand-edited file is refused, while read-only callers pass false.
 func Resolve(req Request, all []inventory.Node, refuseControlPlane bool) (*Result, error) {
 	switch {

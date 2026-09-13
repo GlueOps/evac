@@ -54,8 +54,8 @@ func scopeWith(t *testing.T, pods []corev1.Pod, pvcs []corev1.PersistentVolumeCl
 	return s
 }
 
-// The gap §7 describes: a run died between classification and the PVC delete,
-// so the claim is marked but no pod is left to discover it through.
+// The gap in the pod-derived path: a run died between classification and the
+// PVC delete, so the claim is marked but no pod is left to discover it through.
 func TestLeftoverFindsMarkedPVCWithNoPod(t *testing.T) {
 	t.Parallel()
 	now := metav1.Now()

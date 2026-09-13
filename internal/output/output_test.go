@@ -22,7 +22,7 @@ func at(s string) time.Time {
 	return t
 }
 
-func TestEventTextMatchesTheSpecLineFormat(t *testing.T) {
+func TestEventTextMatchesTheTranscriptLineFormat(t *testing.T) {
 	t.Parallel()
 	e := Event{
 		Time:      at("2026-09-12T14:02:11Z"),
@@ -109,7 +109,7 @@ func TestJSONOutputCarriesTheSameEvent(t *testing.T) {
 	}
 }
 
-// §5's error blocks are not log lines: their value is the formatting, and in
+// Error blocks are not log lines: their value is the formatting, and in
 // JSON they must keep their fields rather than collapsing into a string.
 func TestDiagnosticRendersAsABlockAndAsStructuredJSON(t *testing.T) {
 	t.Parallel()

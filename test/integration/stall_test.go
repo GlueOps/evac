@@ -22,7 +22,7 @@ import (
 	"github.com/GlueOps/evac/internal/output"
 )
 
-// TestPDBStallReportsTheBlockingBudget covers §5's most likely real failure.
+// TestPDBStallReportsTheBlockingBudget covers the most likely real failure.
 //
 // A PodDisruptionBudget that can never be satisfied makes the eviction API
 // return 429 forever, not slowly. The tool is supposed to time out and then
@@ -89,7 +89,7 @@ func TestPDBStallReportsTheBlockingBudget(t *testing.T) {
 	defer rec.Close()
 
 	opts := drain.Defaults()
-	// Short, so the test takes seconds rather than the spec's ten minutes. The
+	// Short, so the test takes seconds rather than the default ten minutes. The
 	// behaviour under test is what happens at expiry, not the duration.
 	opts.EvictionTimeout = 25 * time.Second
 	opts.JobDeadline = 30 * time.Second
@@ -122,7 +122,7 @@ func TestPDBStallReportsTheBlockingBudget(t *testing.T) {
 	}
 }
 
-// TestJobDeadlineExceededReportsWhatIsStillRunning covers §5 phase 4.
+// TestJobDeadlineExceededReportsWhatIsStillRunning covers phase 4.
 //
 // Job pods are never evicted; they finish on their own. When they do not finish
 // within the deadline the tool must exit non-zero rather than silently reporting
@@ -195,7 +195,7 @@ func TestJobDeadlineExceededReportsWhatIsStillRunning(t *testing.T) {
 		"Job pod(s) still running",
 		"Namespaces affected: " + ns,
 		"Nodes remain cordoned",
-		// §5 requires the re-run command verbatim, node file path included.
+		// The re-run command is given verbatim, node file path included.
 		"evac drain -f nodes.txt",
 	} {
 		if !strings.Contains(out, want) {

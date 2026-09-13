@@ -58,7 +58,7 @@ maintenance work is done.`,
 				return usageErr("--brief and --full are mutually exclusive")
 			}
 
-			// §6: the lock covers drain only. nodes and plan are read-only and
+			// The lock covers drain only. nodes and plan are read-only and
 			// must never take it — an operator should always be able to look at
 			// a cluster while a drain runs.
 			cl, snap, sel, err := sf.resolve(cmd, g, true)
@@ -68,12 +68,11 @@ maintenance work is done.`,
 
 			lk, err := lock.Acquire(cl.Target())
 			if err != nil {
-				// Exit 8 means "another drain holds the lock", which §9 tells a
-				// wrapper is worth retrying shortly. Acquire also fails for
-				// reasons that will never clear on their own — a read-only
-				// XDG_RUNTIME_DIR, a lock file owned by someone else — and
-				// reporting those as 8 sends the wrapper into a wait for a
-				// drain that does not exist.
+				// Exit 8 means "another drain holds the lock" — worth a wrapper
+				// retrying shortly. Acquire also fails for reasons that will never
+				// clear on their own — a read-only XDG_RUNTIME_DIR, a lock file
+				// owned by someone else — and reporting those as 8 sends the
+				// wrapper into a wait for a drain that does not exist.
 				var held *lock.HeldError
 				if errors.As(err, &held) {
 					return exitcode.Wrap(exitcode.LockHeld, err)
@@ -160,7 +159,7 @@ maintenance work is done.`,
 			opts.Parallel = parallel.workers(len(sel.Nodes))
 
 			if opts.Parallel > 1 {
-				// §5: fragile pods bypass eviction by design, so concurrency
+				// Fragile pods bypass eviction by design, so concurrency
 				// means those all go down at once. Worth saying out loud when
 				// the count is non-trivial.
 				if n := len(sc.DowntimeBearing()); n > 0 {
@@ -209,7 +208,7 @@ maintenance work is done.`,
 	return cmd
 }
 
-// confirm renders the §8 confirmation block and reads the answer.
+// confirm renders the confirmation block and reads the answer.
 func confirm(cmd *cobra.Command, rec *output.Recorder, sc *scope.Scope, yes bool) error {
 	summary := render.ConfirmationSummary(sc)
 	rec.Raw("\n" + summary)
@@ -223,13 +222,13 @@ func confirm(cmd *cobra.Command, rec *output.Recorder, sc *scope.Scope, yes bool
 	// than from stdin.
 	//
 	// stdin is not necessarily free: `-f -` consumes it for the node list, which
-	// is the documented pipeline in §2 —
+	// is a documented pipeline —
 	//
 	//	kubectl get nodes -l pool=a -o name | evac drain -f -
 	//
 	// Reading the confirmation from stdin there would see EOF, and the only way
 	// out would be --yes, which turns the documented path into one that skips
-	// confirmation on a destructive command. §8 keeps those two apart
+	// confirmation on a destructive command. Those two are kept apart
 	// deliberately, so the prompt goes to the terminal instead.
 	// Everything above must be on screen before the question is asked: the
 	// prompt bypasses the recorder, so without this barrier it can overtake the
@@ -283,8 +282,8 @@ func openTerminal() (*os.File, error) {
 	return tty, nil
 }
 
-// reportOutcome prints the per-node table §9's aggregation rule calls for, so a
-// reader can see which node produced the reported exit code.
+// reportOutcome prints the per-node table the aggregated exit code calls for,
+// so a reader can see which node produced the reported code.
 func reportOutcome(rec *output.Recorder, res drain.Result) {
 	// The old guard was `len(res.Nodes) <= 1`, which meant a run that failed on
 	// its FIRST node printed nothing at all — while phase 1 had already
@@ -369,7 +368,7 @@ func reportedErr(res drain.Result) error {
 }
 
 // rerunCommand reconstructs the invocation to suggest in failure diagnostics,
-// which §5 requires be given verbatim including the node file path.
+// which must be given verbatim including the node file path.
 func rerunCommand(sf selectionFlags, origin string) string {
 	switch {
 	case len(sf.nodes) > 0:

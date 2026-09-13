@@ -44,7 +44,7 @@ func (s *syncBuffer) String() string {
 	return s.buf.String()
 }
 
-// TestParallelDrainsMultipleNodes covers the §5 concurrent path, which has no
+// TestParallelDrainsMultipleNodes covers the concurrent path, which has no
 // other coverage at any level.
 //
 // Three properties matter and none of them are visible from a serial run:

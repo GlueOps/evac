@@ -18,7 +18,7 @@ jobs:
     if: >-
       !contains(github.event.pull_request.labels.*.name, 'skip-integration')
     runs-on: ubuntu-latest
-    # §5's eviction timeout alone is 10 minutes.
+    # The eviction timeout alone is 10 minutes.
     timeout-minutes: 30
     strategy:
       fail-fast: false

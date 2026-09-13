@@ -1,5 +1,5 @@
-// Package inventory builds the per-node view §3 renders and every other
-// command selects from.
+// Package inventory builds the per-node view the node table renders and every
+// other command selects from.
 package inventory
 
 import (
@@ -12,7 +12,7 @@ import (
 	"github.com/GlueOps/evac/internal/kube"
 )
 
-// Control-plane signals, per §3.1. Any one of them is enough.
+// Control-plane signals. Any one of them is enough.
 const (
 	labelControlPlane = "node-role.kubernetes.io/control-plane"
 	labelMaster       = "node-role.kubernetes.io/master"
@@ -30,8 +30,8 @@ type Node struct {
 	// Uptime is time since the Ready condition last changed. This is a proxy
 	// for boot time and is approximate: it actually reflects the last Ready
 	// flap, so a node that briefly went NotReady reports a short uptime without
-	// having rebooted. §3 requires the column be labelled honestly for this
-	// reason — the gap between Age and Uptime is the signal, not Uptime alone.
+	// having rebooted. The column is labelled honestly for that reason — the
+	// gap between Age and Uptime is the signal, not Uptime alone.
 	Uptime time.Duration
 
 	KubeletVersion string
@@ -47,9 +47,9 @@ type Node struct {
 
 	Ready       bool
 	Schedulable bool
-	// ControlPlane nodes are never drainable by any path (§3.1).
+	// ControlPlane nodes are never drainable by any path.
 	ControlPlane bool
-	// ControlPlaneSignal names which §3.1 signal matched, for the annotation
+	// ControlPlaneSignal names which signal matched, for the annotation
 	// shown in the table.
 	ControlPlaneSignal string
 
@@ -68,8 +68,8 @@ func (n *Node) Drainable() bool { return !n.ControlPlane }
 // Build aggregates a snapshot into per-node rows.
 //
 // Everything here is computed in memory from the snapshot's list results. There
-// is deliberately no per-node query: §3 requires a fixed number of list calls
-// regardless of cluster size.
+// is deliberately no per-node query, so nothing here scales the number of API
+// calls with the size of the cluster.
 func Build(snap *kube.Snapshot) []Node {
 	// Index PVC references by pod so the counts below are a single pass.
 	podsByNode := make(map[string][]*corev1.Pod, len(snap.Nodes))
@@ -145,7 +145,7 @@ func readiness(n *corev1.Node, now time.Time) (ready bool, uptime time.Duration)
 	return false, 0
 }
 
-// controlPlane implements §3.1 detection.
+// controlPlane detects a control-plane node.
 //
 // On k3s only the label fires: the server node carries
 // node-role.kubernetes.io/control-plane but no taint at all, and is fully
@@ -187,8 +187,8 @@ func Drainable(nodes []Node) []Node {
 	return out
 }
 
-// ControlPlaneNames lists the excluded nodes, for the note §4 shows above the
-// picker and the message §3.1 requires when a selection is filtered.
+// ControlPlaneNames lists the excluded nodes, for the note shown above the
+// picker and the message printed when a selection is filtered.
 func ControlPlaneNames(nodes []Node) []string {
 	var out []string
 	for _, n := range nodes {
@@ -199,8 +199,8 @@ func ControlPlaneNames(nodes []Node) []string {
 	return out
 }
 
-// SingleNodeCluster reports the §3.1 edge case: an install where the only node
-// is both control plane and worker, so nothing is drainable. Worth its own
+// SingleNodeCluster reports the edge case of an install where the only node is
+// both control plane and worker, so nothing is drainable. Worth its own
 // message rather than reporting an empty selection.
 func SingleNodeCluster(nodes []Node) bool {
 	return len(nodes) == 1 && nodes[0].ControlPlane
@@ -215,7 +215,7 @@ func ByName(nodes []Node) map[string]*Node {
 	return m
 }
 
-// CuratedLabels implements §3's default label display: show the labels an
+// CuratedLabels implements the default label display: show the labels an
 // operator chose to set, hide the well-known topology noise every node carries.
 func CuratedLabels(l map[string]string) string {
 	var keys []string

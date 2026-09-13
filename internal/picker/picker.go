@@ -1,4 +1,5 @@
-// Package picker implements §4's interactive selection.
+// Package picker provides the interactive node-selection UI behind
+// `evac nodes -i`.
 //
 // Strictly a selection aid: it reads, it never mutates, and it never drains.
 // The drain runs as a separate invocation, which keeps the destructive path
@@ -43,8 +44,8 @@ type Options struct {
 // neither: there is no in-picker sort (--sort-by applies to `evac nodes`, and
 // the picker renders in that order), and control plane nodes are named in a
 // note above the picker rather than rendered as unselectable rows. That still
-// satisfies §3.1's reasoning — show rather than hide, since an operator who
-// cannot find a node will go looking — without needing per-row state.
+// shows rather than hides — an operator who cannot find a node will go
+// looking — without needing per-row state.
 func Run(nodes []inventory.Node, opts Options) (*Result, error) {
 	drainable := inventory.Drainable(nodes)
 	if len(drainable) == 0 {

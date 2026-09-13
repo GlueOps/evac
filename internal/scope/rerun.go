@@ -10,7 +10,7 @@ import (
 
 // Leftover is work discovered from the PV side rather than from pods.
 //
-// §7's recovery model is that every operation is convergent and a re-run
+// The recovery model is that every operation is convergent and a re-run
 // re-derives reality. The pod-derived path covers the normal case, and a PVC
 // carrying a deletionTimestamp is self-evidently unfinished work. The gap opens
 // only if a run died between classification and the PVC delete — at which point

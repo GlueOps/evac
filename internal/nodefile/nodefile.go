@@ -1,4 +1,4 @@
-// Package nodefile reads and writes the plain-text node list §4 specifies.
+// Package nodefile reads and writes the plain-text node list.
 //
 // The format is deliberately dull: greppable, hand-editable, diffable, and
 // trivially hand-writable when someone skips the picker.
@@ -18,15 +18,15 @@ import (
 type File struct {
 	Nodes []string
 	// Context is the value of the "# context:" header, if present. It is
-	// informational only: §4 is explicit that no check is performed against it,
-	// because drain operates on the active kubecontext regardless. It exists so
-	// someone who finds the file later knows what it was generated against.
+	// informational only: no check is performed against it, because drain
+	// operates on the active kubecontext regardless. It exists so someone who
+	// finds the file later knows what it was generated against.
 	Context string
 	// Path is where it was read from, or "-" for stdin.
 	Path string
 }
 
-// DefaultPath returns the per-context node file path §4 specifies.
+// DefaultPath returns the per-context node file path.
 //
 // Per-context rather than a fixed name because selecting for cluster B would
 // otherwise silently overwrite the list for cluster A.
@@ -119,9 +119,10 @@ func parse(r io.Reader) (*File, error) {
 	return out, nil
 }
 
-// Write writes a node list with the §4 header. The write goes to a temporary
-// file in the same directory and is then renamed, so an interrupted write
-// cannot leave a half-written list that a later drain would act on.
+// Write writes a node list with the generated-at and context header. The write
+// goes to a temporary file in the same directory and is then renamed, so an
+// interrupted write cannot leave a half-written list that a later drain would
+// act on.
 func Write(path, context string, nodes []string) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".evac-nodes-*")

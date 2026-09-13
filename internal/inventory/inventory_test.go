@@ -35,7 +35,7 @@ func tainted(key string, effect corev1.TaintEffect) func(*corev1.Node) {
 	}
 }
 
-// §3.1 lists four signals. Each must independently mark a node control plane,
+// There are four control-plane signals. Each must independently mark a node,
 // because clusters differ in which ones they set.
 func TestControlPlaneDetectionSignals(t *testing.T) {
 	t.Parallel()
@@ -68,7 +68,7 @@ func TestControlPlaneDetectionSignals(t *testing.T) {
 
 // Observed on k3s v1.35: the server node carries the control-plane label, has
 // no taint, and is schedulable. Detection must not depend on the taint, and the
-// node must stay schedulable so §8's capacity math can count it.
+// node must stay schedulable so the preflight capacity math can count it.
 func TestK3sServerIsControlPlaneButStillSchedulable(t *testing.T) {
 	t.Parallel()
 	snap := &kube.Snapshot{

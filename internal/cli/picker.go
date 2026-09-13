@@ -14,7 +14,7 @@ import (
 	"github.com/GlueOps/evac/internal/picker"
 )
 
-// runPicker renders §4's selection UI and writes the node file.
+// runPicker renders the interactive selection UI and writes the node file.
 //
 // It never drains. On exit it writes the chosen nodes and prints the resolved
 // path, which is what `evac plan` and `evac drain` then read when -f is omitted.

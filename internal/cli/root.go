@@ -1,4 +1,4 @@
-// Package cli wires the three commands §2 defines.
+// Package cli wires evac's command tree and maps failures onto exit codes.
 package cli
 
 import (
@@ -24,7 +24,7 @@ func SetBuildInfo(v, c, d string) { version, commit, date = v, c, d }
 
 // globals holds the flags every command shares.
 //
-// Only two, deliberately. §1 rejects inheriting kubectl's flag surface, and
+// Only two, deliberately. evac does not inherit kubectl's flag surface, and
 // k8s.io/cli-runtime's genericclioptions would register around twenty in one
 // shot — including -n, which means nothing to a node-scoped, multi-namespace
 // operation.
@@ -39,10 +39,10 @@ func (g *globals) client() (*kube.Client, error) {
 
 // Execute runs the CLI and returns the process exit code.
 //
-// Errors are returned up to here rather than exiting in place: §10 requires
-// that no worker call os.Exit, because it skips defers and discards buffered
-// log lines — and for a tool whose transcript is the audit trail, those final
-// lines are the most important ones.
+// Errors are returned up to here rather than exiting in place: no worker may
+// call os.Exit, because it skips defers and discards buffered log lines — and
+// for a tool whose transcript is the audit trail, those final lines are the
+// most important ones.
 func Execute() exitcode.Code {
 	g := &globals{}
 	kube.SilenceKlog()
@@ -60,8 +60,8 @@ volume, and refuses entirely on CSI-backed or AWS/EKS clusters.
 It operates on the active kubecontext and drains worker nodes only.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		// No default action: §1 requires the operator choose targets, so a bare
-		// invocation shows help rather than guessing.
+		// No default action: the operator chooses targets, so a bare invocation
+		// shows help rather than guessing.
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
@@ -112,7 +112,7 @@ func newVersionCmd() *cobra.Command {
 // Cobra reports an unknown subcommand and a failed argument count as plain
 // errors with no distinguishing type, so there is nothing to match on but the
 // message. That is unpleasant, and it is still better than reporting a typo as
-// an API failure: §9 gives these codes distinct meanings precisely so a wrapper
+// an API failure: these codes carry distinct meanings precisely so a wrapper
 // can tell "fix your invocation" from "something is broken".
 func classify(err error) exitcode.Code {
 	if code := exitcode.Of(err); code != exitcode.Error {
@@ -138,8 +138,8 @@ func classify(err error) exitcode.Code {
 	return exitcode.Error
 }
 
-// usageErr marks an error as a flag or input problem, which §9 gives its own
-// exit code so a wrapper can tell "you asked for something impossible" from
+// usageErr marks an error as a flag or input problem, which has its own exit
+// code so a wrapper can tell "you asked for something impossible" from
 // "the cluster misbehaved".
 func usageErr(format string, args ...any) error {
 	return exitcode.Wrap(exitcode.Usage, fmt.Errorf(format, args...))

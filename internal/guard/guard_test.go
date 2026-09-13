@@ -18,7 +18,7 @@ import (
 // introduces a volume source that is not listed here, forcing a conscious
 // decision instead of letting a new backend inherit a default.
 var verdicts = map[string]bool{
-	"Local": true, // node-local volume — the only deletable source (§5)
+	"Local": true, // node-local volume — the only deletable source
 
 	// hostPath is deliberately excluded even though it looks local: it is just
 	// a path on the node, so one pointing into an NFS mount would look local
@@ -204,7 +204,7 @@ func TestUnboundPVCIsRefusedAndReportsItsProvisioner(t *testing.T) {
 	got := Evaluate(pvc, nil, nil)
 
 	if got.Allowed {
-		t.Error("Allowed = true — an unbound PVC has no PV to identify, and §5 requires positive identification")
+		t.Error("Allowed = true — an unbound PVC has no PV to identify, and the guard requires positive identification")
 	}
 	if !contains(got.Reason, "rancher.io/local-path") {
 		t.Errorf("Reason = %q, want it to report the provisioner for context", got.Reason)

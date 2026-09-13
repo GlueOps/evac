@@ -228,8 +228,8 @@ func TestNodeSelectorWithNoRemainingMatchIsFatal(t *testing.T) {
 	}
 }
 
-// The failure the spec expects to matter most here: a 3-replica StatefulSet
-// with one-replica-per-node anti-affinity cannot reschedule when the other two
+// The failure that matters most here: a 3-replica StatefulSet with
+// one-replica-per-node anti-affinity cannot reschedule when the other two
 // occupy the remaining nodes. Capacity is fine; the scheduler still refuses.
 func TestAntiAffinityTrapIsFatalEvenWhenCapacityIsFine(t *testing.T) {
 	t.Parallel()

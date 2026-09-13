@@ -1,10 +1,10 @@
-// Package output implements §9's audit trail.
+// Package output implements evac's audit trail.
 //
-// §9 asks for three things at once: a streaming human line format, an always-on
+// It provides three things at once: a streaming human line format, an always-on
 // log file, and --output=json carrying the same events. Those are three
 // renderings of one model, not three loggers — which is why there is no logging
 // library here. slog, zerolog and zap each want to own the schema, and the
-// richly formatted error blocks §5 specifies are not log lines at all.
+// richly formatted error blocks this tool emits are not log lines at all.
 package output
 
 import (
@@ -29,7 +29,7 @@ type Event struct {
 	Time  time.Time
 	Level Level
 
-	// Phase is the §5 phase number ("1", "1b", "2", "3", "4"), empty outside
+	// Phase is the drain phase number ("1", "1b", "2", "3", "4"), empty outside
 	// the drain.
 	Phase string
 	// Node is the node this concerns. Required under --parallel: without it,
@@ -51,7 +51,7 @@ type Event struct {
 	Attrs map[string]string
 }
 
-// Text renders the §9 line format:
+// Text renders the transcript line format:
 //
 //	14:02:11  phase=2 ns=platform  evicting pod/argocd-repo-server-7d4  node=node-a-01
 //
@@ -106,7 +106,7 @@ func (e Event) Text(withDate bool) string {
 	return b.String()
 }
 
-// Diagnostic is a §5-style error block: a multi-line, indented explanation with
+// Diagnostic is an error block: a multi-line, indented explanation with
 // the numbers that matter and the exact commands to run next.
 //
 // It is deliberately a separate type from Event. These are not log lines — they
@@ -125,8 +125,8 @@ type Diagnostic struct {
 	Facts map[string]string
 	// Suggested are verbatim commands the operator can run.
 	Suggested []string
-	// Rerun is the command to re-run once resolved. §5 requires this on every
-	// failure that leaves work outstanding.
+	// Rerun is the command to re-run once resolved. Set on every failure that
+	// leaves work outstanding.
 	Rerun string
 	// Node, when set, scopes the diagnostic.
 	Node string

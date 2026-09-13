@@ -10,7 +10,7 @@ import (
 	"github.com/GlueOps/evac/internal/scope"
 )
 
-// PlanOptions control the §8 plan rendering.
+// PlanOptions control plan rendering.
 type PlanOptions struct {
 	Context string
 	// Brief collapses the PVC table to per-namespace counts.
@@ -25,7 +25,7 @@ type PlanOptions struct {
 // scan fine; two hundred do not.
 const pvcCollapseThreshold = 50
 
-// Plan renders the §8 output.
+// Plan renders the plan output.
 //
 // The ordering is the substance. PVC destruction is the only irreversible part
 // of this operation — everything else reschedules — so it leads, above pod
@@ -99,8 +99,8 @@ func planPVCs(w io.Writer, s *scope.Scope, opts PlanOptions) error {
 		fmt.Fprintf(w, "\n  %d PVCs\n", len(targets))
 	}
 
-	// PVCs already marked for deletion are unfinished work from a previous run
-	// (§7), not new losses — worth distinguishing so a re-run reads honestly.
+	// PVCs already marked for deletion are unfinished work from a previous run,
+	// not new losses — worth distinguishing so a re-run reads honestly.
 	var resuming int
 	for _, t := range targets {
 		if t.AlreadyDeleting {
@@ -126,7 +126,7 @@ func planGuardStatus(w io.Writer, s *scope.Scope) {
 	fmt.Fprintf(w, "      %d PVC(s) in scope will NOT be deleted; pods will rebind on reschedule\n\n", len(s.PVCs))
 }
 
-// 2b. Leftover work from a previous run, found via §7's PV-side discovery.
+// 2b. Leftover work from a previous run, found via PV-side discovery.
 //
 // Shown only when there is something to show. It appears near the top because
 // it is unfinished destructive work: a PVC already marked for deletion is data
@@ -260,7 +260,7 @@ func planPreflight(w io.Writer, pf *preflight.Results) {
 	fmt.Fprint(w, pf.Summary())
 }
 
-// ConfirmationSummary is the block §8 requires immediately above the prompt.
+// ConfirmationSummary is the block shown immediately above the prompt.
 //
 // The PVC table may have scrolled off by the time the operator reaches the
 // prompt, and this is the line their eye lands on — so the irreversible items

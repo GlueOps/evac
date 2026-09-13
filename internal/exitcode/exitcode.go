@@ -1,4 +1,5 @@
-// Package exitcode defines §9's exit codes and the rule for combining them.
+// Package exitcode defines evac's process exit codes and how per-node codes
+// combine into one.
 //
 // Distinct codes matter because "not finished yet" and "something is broken"
 // call for different responses from a wrapper: the first is worth retrying on a

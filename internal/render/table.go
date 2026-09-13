@@ -1,8 +1,8 @@
-// Package render turns domain data into the text tables §3 and §8 specify.
+// Package render turns domain data into the node and plan tables.
 //
-// stdlib text/tabwriter throughout: §9 requires the transcript be tee-able and
-// greppable, which rules out borders and ANSI decoration, and the column
-// alignment tabwriter gives is the whole requirement.
+// stdlib text/tabwriter throughout: a tee-able, greppable transcript rules out
+// borders and ANSI decoration, and the column alignment tabwriter gives is the
+// whole requirement.
 package render
 
 import (
@@ -115,7 +115,7 @@ func (t Table) widthOf(cols []Column) int {
 // detectWidth returns the terminal width, or 0 when stdout is not a terminal.
 //
 // Returning 0 rather than a default matters: when output is piped to a file or
-// through tee, every column must survive, because that file is the §9 audit
+// through tee, every column must survive, because that file is the audit
 // artifact.
 func detectWidth() int {
 	fd := int(os.Stdout.Fd())

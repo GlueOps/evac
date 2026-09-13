@@ -45,8 +45,8 @@ func requireNFS(t *testing.T) {
 // know the field paths are right and that a drain actually leaves the claim
 // alone while still moving the workload.
 //
-// NFS is the case the spec calls out as must-persist: losing one would mean
-// deleting data on a NAS that has nothing to do with the node being drained.
+// NFS is the must-persist case: losing one would mean deleting data on a NAS
+// that has nothing to do with the node being drained.
 func TestNFSBackedVolumeSurvivesADrain(t *testing.T) {
 	requireNFS(t)
 	workerNodes(t, 2)
@@ -189,8 +189,8 @@ func waitGone(t *testing.T, get func() error) {
 
 // TestProviderGuardSuppressesRealClaims replaces four near-identical subtests.
 //
-// All four §5 provider signals are already driven by
-// guard.TestProviderDetection as a pure function. What a real cluster uniquely
+// All four provider signals are already driven by guard.TestProviderDetection
+// as a pure function. What a real cluster uniquely
 // establishes is the wiring: that FullSnapshot actually collects the
 // StorageClasses DetectProvider reads, and — the part the old version asserted
 // vacuously — that tripping the guard suppresses claims that WOULD otherwise

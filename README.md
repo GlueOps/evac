@@ -202,20 +202,6 @@ make docker-snapshot   # or in a container, like every other target
 These are deliberately not tag pushes. release-please derives its baseline from
 tags, and a tag would also cut a real GitHub release.
 
-### A note on the § references in the code
-
-Comments throughout the source cite sections of a design spec — `§5 requires…`, `(§3.1)`
-and so on. That spec was `SPEC.md`, removed at `3c526ef`; it is still in git history if
-you want the long-form reasoning:
-
-```sh
-git show 3c526ef:SPEC.md
-```
-
-The comments were written to stand on their own, so a citation is supporting evidence
-rather than the substance — but the numbers no longer resolve to anything in the working
-tree, and that is deliberate rather than an oversight.
-
 ## License
 
 See [LICENSE](LICENSE).

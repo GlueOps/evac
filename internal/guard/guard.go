@@ -1,4 +1,4 @@
-// Package guard implements §5's two independent checks on PVC deletion: a
+// Package guard implements two independent checks on PVC deletion: a
 // cluster-wide provider kill switch, and a per-PVC backing-volume allowlist.
 //
 // Neither has an override flag, by design. A guard with an escape hatch is a
@@ -31,7 +31,8 @@ type ProviderVerdict struct {
 	Signal string
 }
 
-// DetectProvider implements §5's provider detection. Any one signal is enough.
+// DetectProvider implements the cluster-wide provider check. Any one signal
+// is enough.
 //
 // This is narrower than the per-PVC check below and exists to fail fast and
 // loudly on the environment where PVC deletion is most dangerous: EBS volumes
@@ -93,7 +94,7 @@ const sourceLocal = "Local"
 
 // Evaluate decides whether one PVC's backing volume may be deleted.
 //
-// Authority order follows §5: the PV's volume source is the volume definition
+// Authority order: the PV's volume source is the volume definition
 // itself, so it cannot be stale or absent the way an annotation can. The
 // annotation and StorageClass are used only to describe what a refused volume
 // actually is, never to authorise a deletion.
@@ -105,8 +106,8 @@ func Evaluate(
 	if pvc.Spec.VolumeName == "" {
 		// Unbound: there is no PV to inspect, so the backing volume cannot be
 		// identified. Refuse. Nothing is lost by doing so — an unbound PVC has
-		// no provisioned data behind it — and §5 requires positive
-		// identification rather than an inference from absence.
+		// no provisioned data behind it — and the guard identifies positively
+		// rather than inferring from absence.
 		return Decision{
 			Source: "",
 			Reason: fmt.Sprintf("PVC is unbound (%s); backing volume cannot be identified%s",
@@ -187,7 +188,7 @@ func describeSource(src string, pv *corev1.PersistentVolume) string {
 	return src
 }
 
-// describeProvisioner reads the convenience signals §5 allows for reporting:
+// describeProvisioner reads the convenience signals used only for reporting:
 // the provisioner annotation set by the provisioning controller, falling back
 // to the StorageClass. Neither can authorise a deletion.
 func describeProvisioner(pvc *corev1.PersistentVolumeClaim, classesByName map[string]*storagev1.StorageClass) string {

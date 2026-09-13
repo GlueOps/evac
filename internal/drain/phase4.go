@@ -39,9 +39,9 @@ func (e *Engine) phase4(ctx context.Context, node string, drainStart time.Time) 
 		if time.Now().After(deadline) {
 			// Which code this is depends on what is actually left.
 			//
-			// Exit 3 is the only code §9 tells a wrapper it may retry on a
-			// timer, and that is only honest for Job pods, which finish on
-			// their own. Anything else on the node will still be there on the
+			// Exit 3 is the only code a wrapper may retry on a timer, and that
+			// is only honest for Job pods, which finish on their own.
+			// Anything else on the node will still be there on the
 			// next attempt — a pod with spec.nodeName set bypasses the cordon,
 			// and an unmanaged pod created mid-drain is nobody's to reap — so
 			// reporting 3 would send a wrapper into a loop that burns the full
@@ -78,15 +78,15 @@ func (e *Engine) phase4(ctx context.Context, node string, drainStart time.Time) 
 // are storage cleanup rather than workload.
 //
 // This is the one place a per-node field selector is used, and it is
-// deliberate: it is a bounded poll of a single node during execution, not the
-// inventory sweep §3's rule is about.
+// deliberate: it is a bounded poll of a single node during execution, not a
+// cluster-wide inventory sweep, where the fixed call count matters.
 func (e *Engine) pollNode(ctx context.Context, node string) (blockers []*corev1.Pod, jobs []*corev1.Pod, err error) {
 	// Paginated. A single Limit-bounded page is not the same as "the pods on
 	// this node": a node that has accumulated Succeeded Job pods — common
 	// wherever nothing sets a TTL on them — can exceed one page, and if the
 	// first page happens to filter out entirely, this would report an empty
-	// node and declare the drain complete with workload still running. §9's
-	// whole point is that the tool is honest about an incomplete drain.
+	// node and declare the drain complete with workload still running. The tool
+	// must never report a drain finished while work remains on the node.
 	var items []corev1.Pod
 	opts := metav1.ListOptions{
 		FieldSelector: fields.OneTermEqualSelector("spec.nodeName", node).String(),
@@ -147,7 +147,7 @@ func ownerKind(p *corev1.Pod) string {
 	return ""
 }
 
-// jobDeadlineDiagnostic renders the §5 phase 4 expiry block.
+// jobDeadlineDiagnostic renders the phase 4 expiry block.
 func (e *Engine) jobDeadlineDiagnostic(node string, jobs []*corev1.Pod, drainStart time.Time) error {
 	elapsed := time.Since(drainStart).Round(time.Second)
 

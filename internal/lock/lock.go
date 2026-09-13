@@ -1,4 +1,5 @@
-// Package lock implements §6's mutual exclusion.
+// Package lock provides the advisory file lock that keeps two drains from
+// running at once.
 //
 // Only one drain may run at a time. Two concurrent runs would each derive scope
 // from live state while the other mutates it, producing overlapping cordons and
@@ -138,10 +139,10 @@ func (l *Lock) Release() error {
 	return err
 }
 
-// DefaultPath resolves §6's lock location.
+// DefaultPath resolves the lock file location.
 //
 // $XDG_RUNTIME_DIR first, then $TMPDIR, then /tmp. The order matters on macOS,
-// where XDG_RUNTIME_DIR is essentially never set — so what the spec called the
+// where XDG_RUNTIME_DIR is essentially never set — so what looks like the
 // fallback is in practice the normal path there, and $TMPDIR (per-user, under
 // /var/folders) is a better landing place than the world-writable /tmp.
 func DefaultPath() (string, error) {

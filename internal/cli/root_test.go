@@ -7,7 +7,7 @@ import (
 	"github.com/GlueOps/evac/internal/exitcode"
 )
 
-// §9 gives the codes distinct meanings so a wrapper can tell "fix your
+// The codes carry distinct meanings so a wrapper can tell "fix your
 // invocation" from "something is broken". Cobra reports its own parse and
 // argument failures as plain errors, so without classification a typo exits 1
 // and reads as an API failure.

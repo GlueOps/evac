@@ -45,7 +45,7 @@ func TestNarrowTerminalsDropLowPriorityColumns(t *testing.T) {
 	}
 }
 
-// Piping to a file or through tee must never lose columns: that file is the §9
+// Piping to a file or through tee must never lose columns: that file is the
 // audit artifact.
 func TestNonTerminalOutputKeepsEveryColumn(t *testing.T) {
 	t.Parallel()
@@ -99,7 +99,7 @@ func build(t *testing.T, ns ...corev1.Node) []inventory.Node {
 	return inventory.Build(kube.NewSnapshotForTest(kube.SnapshotFixture{TakenAt: time.Now(), Nodes: ns}))
 }
 
-// §3.1: show rather than hide — an operator who cannot find a node will go
+// Show rather than hide — an operator who cannot find a node will go
 // looking, and silence is worse than an explanation.
 func TestNodeTableShowsControlPlaneNodesAnnotatedAsExcluded(t *testing.T) {
 	t.Parallel()

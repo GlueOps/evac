@@ -1,11 +1,12 @@
-// Package drain executes §5's phases.
+// Package drain executes a node drain: cordon, classify, destroy local PVCs,
+// move their pods off, and wait on Jobs.
 //
 // The eviction call here is the policy/v1 subresource directly, not
 // k8s.io/kubectl/pkg/drain. That library's unit of work is a node-scoped batch
 // — it spawns a goroutine per pod, owns its own retry loop and then waits
 // across the whole set — which cannot express phase 2's requirement to delete a
 // PVC, evict one pod, and wait for that pod object to disappear before touching
-// the next. See §10.
+// the next.
 package drain
 
 import (
@@ -46,7 +47,9 @@ type Options struct {
 	PollInterval time.Duration
 }
 
-// Defaults returns the spec's values.
+// Defaults returns evac's built-in timeouts and deadline: 10m for an eviction
+// to complete, 30m for Jobs to finish on their own, 5m for a PVC to clear
+// pvc-protection.
 func Defaults() Options {
 	return Options{
 		EvictionTimeout: 10 * time.Minute,
@@ -88,7 +91,7 @@ type NodeResult struct {
 	Code exitcode.Code
 	Err  error
 	// Skipped marks a node that phase 1 cordoned but the run never reached,
-	// because an earlier node failed. Cordon is one-way (§1), so these are left
+	// because an earlier node failed. Cordon is one-way, so these are left
 	// unschedulable and the operator has to know about them — a serial run that
 	// stops at node 2 of 5 has still taken three nodes out of service.
 	Skipped bool
@@ -99,7 +102,8 @@ type Result struct {
 	Nodes []NodeResult
 }
 
-// Code combines the per-node codes using §9's precedence.
+// Code combines the per-node codes into one. See exitcode.Combine for the
+// precedence.
 func (r Result) Code() exitcode.Code {
 	codes := make([]exitcode.Code, 0, len(r.Nodes))
 	for _, n := range r.Nodes {
@@ -205,8 +209,8 @@ func (e *Engine) runParallel(ctx context.Context) Result {
 	jobs := make(chan job)
 	results := make(chan NodeResult, len(e.scope.Nodes))
 
-	// Set by the first worker to fail. §5 asks for both halves of this: workers
-	// already running finish the node they are on, but no NEW node is started.
+	// Set by the first worker to fail. Both halves matter: workers already
+	// running finish the node they are on, but no NEW node is started.
 	// Dispatching regardless meant a failure on node 1 still drained nodes 5
 	// through 12 — serial mode stops, and the asymmetry was invisible.
 	var failed atomic.Bool
@@ -330,7 +334,7 @@ func (e *Engine) phase3(ctx context.Context, node string) error {
 	return nil
 }
 
-// movePod implements the §5 ordering for one pod.
+// movePod moves one pod off a node, PVC first.
 //
 //  1. Delete PVC          → sets deletionTimestamp; pvc-protection holds it
 //  2. Evict (or delete) the pod
@@ -430,9 +434,8 @@ func (e *Engine) deletePVC(ctx context.Context, phase, node string, t scope.PVCT
 		return nil
 	}
 	if t.AlreadyDeleting {
-		// §7: convergent. A PVC already carrying a deletionTimestamp is
-		// unfinished work from an earlier run; re-issuing the delete achieves
-		// nothing.
+		// Convergent: a PVC already carrying a deletionTimestamp is unfinished
+		// work from an earlier run, so re-issuing the delete achieves nothing.
 		e.rec.Event(output.Event{
 			Phase: phase, Node: node, Namespace: t.PVC.Namespace,
 			Kind: "pvc", Name: t.PVC.Name, Msg: "already marked for deletion, skipping",
@@ -448,7 +451,7 @@ func (e *Engine) deletePVC(ctx context.Context, phase, node string, t scope.PVCT
 
 	// Deleted by UID, not by name.
 	//
-	// The guard's verdict (§5) was computed against the object in the snapshot,
+	// The guard's verdict was computed against the object in the snapshot,
 	// and the snapshot is taken before the plan is rendered — so an operator
 	// reading the plan, plus the drain itself, can put minutes between the
 	// decision and the deletion. In that window a claim can be deleted and
@@ -466,7 +469,7 @@ func (e *Engine) deletePVC(ctx context.Context, phase, node string, t scope.PVCT
 		})
 	switch {
 	case err == nil, apierrors.IsNotFound(err):
-		// Already gone is success: §7 requires every operation be convergent.
+		// Already gone is success: every operation here is convergent.
 		return nil
 	case apierrors.IsConflict(err):
 		// The claim was replaced since the plan. Its verdict is void, so stop
@@ -492,7 +495,7 @@ func (e *Engine) deletePod(ctx context.Context, pod *corev1.Pod) error {
 	switch {
 	case err == nil, apierrors.IsNotFound(err), apierrors.IsConflict(err):
 		// NotFound and Conflict both mean "the pod we meant is gone", which is
-		// the outcome this call wanted. §7: convergent.
+		// the outcome this call wanted. Convergent, so it counts as success.
 		return nil
 	default:
 		return err
@@ -664,9 +667,9 @@ func (e *Engine) waitPVCGone(ctx context.Context, phase, node string, t scope.PV
 
 // waitWorkloadReady waits for the workload to be whole again before moving on.
 //
-// §5 says to wait on the replacement pod reaching Running, never on the PVC
-// reaching Bound: the PVC binds as a consequence of scheduling, so waiting on
-// it inverts the dependency and reports false failures on every run. Local
+// It waits on the replacement pod reaching Running, never on the PVC reaching
+// Bound: the PVC binds as a consequence of scheduling, so waiting on it
+// inverts the dependency and reports false failures on every run. Local
 // volumes use WaitForFirstConsumer, so a freshly created PVC staying Pending is
 // the designed behaviour, not a stall.
 //

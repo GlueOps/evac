@@ -25,8 +25,8 @@ type Client struct {
 }
 
 // Options are the connection flags. Both mirror kubectl's meaning exactly:
-// operators already know what they do, and §1 requires the standard loading
-// rules so KUBECONFIG, --kubeconfig and --context all behave as expected.
+// operators already know what they do, and the standard loading rules apply so
+// KUBECONFIG, --kubeconfig and --context all behave as expected.
 type Options struct {
 	// Kubeconfig is an explicit path, overriding KUBECONFIG. Empty means
 	// "use the default loading rules".
@@ -37,9 +37,9 @@ type Options struct {
 
 // New resolves the kubeconfig and builds a client.
 //
-// §10 deliberately avoids k8s.io/cli-runtime's genericclioptions here: it
-// registers around twenty flags in one shot, including -n, which §1 rejects for
-// a node-scoped tool. Declaring the two flags by hand and feeding them to the
+// This deliberately avoids k8s.io/cli-runtime's genericclioptions: it registers
+// around twenty flags in one shot, including -n, which means nothing to a
+// node-scoped tool. Declaring the two flags by hand and feeding them to the
 // deferred loader costs very little and keeps the flag surface honest.
 func New(opts Options) (*Client, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()

@@ -9,7 +9,7 @@
   "labels": ["dependencies"],
   "packageRules": [
     {
-      "description": "The Kubernetes client libraries are held to the minor that supports the server versions in the CI matrix. client-go follows the ±1 skew policy, so v0.35.x covers 1.34 through 1.36. Moving the minor is a decision about which clusters this tool supports, not a routine bump: it must go with a matrix change in .github/workflows/integration.yml and a SPEC.md update.",
+      "description": "The Kubernetes client libraries are held to the minor that supports the server versions in the CI matrix. client-go follows the ±1 skew policy, so v0.35.x covers 1.34 through 1.36. Moving the minor is a decision about which clusters this tool supports, not a routine bump: it must go with a matrix change in .github/workflows/integration.yml.",
       "matchPackageNames": ["k8s.io/api", "k8s.io/apimachinery", "k8s.io/client-go"],
       "allowedVersions": "<0.36.0",
       "groupName": "kubernetes client libraries"

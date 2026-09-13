@@ -1,5 +1,6 @@
-// Package preflight implements §8's checks: the things that turn a maintenance
-// window into everything-Pending if nobody looks first.
+// Package preflight implements the checks evac plan and evac drain both run:
+// the things that turn a maintenance window into everything-Pending if nobody
+// looks first.
 package preflight
 
 import (
@@ -54,7 +55,7 @@ func (r *Results) Failed() bool {
 // Add appends a finding.
 func (r *Results) Add(f Finding) { r.Findings = append(r.Findings, f) }
 
-// Run executes every §8 check against a computed scope.
+// Run executes every check against a computed scope.
 func Run(s *scope.Scope) *Results {
 	res := &Results{}
 	remaining := remainingNodes(s)
@@ -70,7 +71,7 @@ func Run(s *scope.Scope) *Results {
 // cordoned everything selected.
 //
 // This deliberately includes schedulable control-plane nodes. They are excluded
-// from *draining* by §3.1 but remain valid scheduling targets — on k3s they are
+// from *draining* but remain valid scheduling targets — on k3s they are
 // untainted and routinely receive workloads — so leaving them out would
 // under-report capacity and raise false shortfalls on every k3s cluster.
 func remainingNodes(s *scope.Scope) []*corev1.Node {
