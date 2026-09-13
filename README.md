@@ -212,22 +212,24 @@ The sentinel namespace is the guard that matters: it is a property of the target
 rather than of your shell, so a mistyped context name cannot reach a cluster nobody marked as
 disposable.
 
-### Release-candidate builds
+### PR builds
 
-Binaries for every release target, from any branch, without tagging:
+Every pull request that touches Go code gets binaries built for it
+automatically — linux and darwin, amd64 and arm64. A comment on the PR links
+them; they are attached to the workflow run and expire after 7 days.
+
+They are versioned `0.0.0-<branch>.<sha>`, so `evac version` reports which
+branch and commit you are running and cannot be mistaken for a release.
+
+To build the same thing locally:
 
 ```sh
-make snapshot          # needs goreleaser locally
+make snapshot          # needs goreleaser
 make docker-snapshot   # or in a container, like every other target
 ```
 
-Output lands in `dist/`, versioned `0.0.0-rc.<branch>.<sha>` so a tarball says
-where it came from and `evac version` cannot be mistaken for a release.
-
-To build one in CI instead, add the `build-rc` label to a pull request — the
-workflow runs against that PR's head and attaches the archives to the run. It is
-deliberately not a tag push: release-please derives its baseline from tags, and
-a tag would also cut a real GitHub release.
+These are deliberately not tag pushes. release-please derives its baseline from
+tags, and a tag would also cut a real GitHub release.
 
 [`SPEC.md`](SPEC.md) is the source of truth for behaviour and carries the reasoning behind
 each decision.
