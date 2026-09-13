@@ -148,7 +148,7 @@ against k3s, and `--parallel` has no unit coverage.
 
 Go 1.26.6 or newer is required, and `client-go` is held at v0.35.x deliberately — it
 supports Kubernetes 1.34 to 1.36 under the ±1 skew policy, which is what the integration
-matrix tests. Raising it narrows which clusters are supported; see SPEC.md §10.
+matrix tests. Raising it narrows which clusters are supported.
 
 The Go floor is a security one rather than a feature one: earlier 1.26 patches carry
 stdlib vulnerabilities reachable through client-go's TLS paths, and CI fails on them via
@@ -202,8 +202,19 @@ make docker-snapshot   # or in a container, like every other target
 These are deliberately not tag pushes. release-please derives its baseline from
 tags, and a tag would also cut a real GitHub release.
 
-[`SPEC.md`](SPEC.md) is the source of truth for behaviour and carries the reasoning behind
-each decision.
+### A note on the § references in the code
+
+Comments throughout the source cite sections of a design spec — `§5 requires…`, `(§3.1)`
+and so on. That spec was `SPEC.md`, removed at `3c526ef`; it is still in git history if
+you want the long-form reasoning:
+
+```sh
+git show 3c526ef:SPEC.md
+```
+
+The comments were written to stand on their own, so a citation is supporting evidence
+rather than the substance — but the numbers no longer resolve to anything in the working
+tree, and that is deliberate rather than an oversight.
 
 ## License
 

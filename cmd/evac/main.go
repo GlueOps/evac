@@ -1,7 +1,7 @@
 // Command evac drains Kubernetes worker nodes and destroys their local PVCs.
 //
-// See SPEC.md, and read §5 before running it anywhere: this tool destroys data
-// by design.
+// This tool destroys data by design: read the README before running it
+// anywhere, in particular which clusters it is and is not for.
 package main
 
 import (
