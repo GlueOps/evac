@@ -31,7 +31,7 @@ on:
       - go.sum
       - Makefile
       - .goreleaser.yaml
-      - .github/workflows/rc-build.yaml
+      - .github/workflows/pr-build.yaml
 
 permissions:
   contents: read

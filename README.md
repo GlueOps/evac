@@ -43,7 +43,7 @@ Or download a binary from [releases](https://github.com/GlueOps/evac/releases).
 
 ```sh
 evac nodes                 # inventory table
-evac nodes -i              # pick nodes interactively, write a node file
+evac nodes -i              # --interactive: pick nodes, write a node file
 evac plan                  # blast radius + preflight, no mutations
 evac drain                 # plan, confirm, execute
 ```
@@ -61,6 +61,16 @@ kubectl get nodes -l pool=a -o name | evac drain -f -
 
 `evac` operates on the **active kubecontext**. `KUBECONFIG`, `--kubeconfig` and `--context`
 all behave as they do with kubectl.
+
+### Timeouts
+
+| Flag | Default | Bounds |
+|---|---|---|
+| `--eviction-timeout` | 10m | One pod, from the first eviction attempt to the pod object being gone |
+| `--job-deadline` | 30m | Per node, waiting for Job pods to finish on their own |
+| `--pvc-timeout` | 5m | How long a claim may stay `Terminating` before the run reports it stuck |
+
+Each expiry has its own exit code, so a wrapper can tell them apart — see below.
 
 ### What a drain actually does
 
@@ -108,7 +118,7 @@ loudly what it overrode.
 | Code | Meaning | Retry sensible? |
 |---|---|---|
 | `0` | Drain completed | — |
-| `1` | Error — API failure, unexpected condition | No |
+| `1` | Error — API failure, unexpected condition, or pods that cannot be drained | No |
 | `2` | Usage error — bad flags, unknown command, unreadable node file | No |
 | `3` | Timed out waiting on Job pods | Yes, on a timer |
 | `4` | Eviction timeout — often a PDB stall | Only after investigating |
@@ -172,6 +182,18 @@ rules:
 ```
 
 Enforcing scope at the API server is stronger than enforcing it in the binary.
+
+## Releases
+
+Releases are cut by [release-please](https://github.com/googleapis/release-please) from
+[Conventional Commits](https://www.conventionalcommits.org/) on `main`. Merging a `feat:` or
+`fix:` opens a release PR that bumps the version and updates `CHANGELOG.md`; merging *that*
+tags `vX.Y.Z`, cuts the GitHub release, and triggers goreleaser to attach binaries to it.
+
+Nothing is released by pushing a tag by hand, and nothing is released from a branch.
+
+The first release will be `0.1.0`. This is pre-1.0 deliberately: the tool has only ever run
+against k3s, and `--parallel` has no unit coverage.
 
 ## Development
 

@@ -533,7 +533,7 @@ Job pods land on the node, so they drain naturally — but "naturally" could be 
 hours.
 
 Terminal condition: **no non-DaemonSet, non-Job pods remain on the selected nodes.**
-Then wait for Job pods with a configurable deadline.
+Then wait for Job pods with a configurable deadline: **30 minutes**, via `--job-deadline`.
 
 **Make the terminal check a poll, not a single evaluation.** Deleting a local-path PVC
 spawns a short-lived helper pod on the node to remove the directory — the provisioner sets
@@ -715,7 +715,8 @@ and the tool must not patch finalizers off. Stripping `pvc-protection` while a
 `VolumeAttachment` still exists is exactly how a volume ends up attached to a node with no
 Kubernetes object tracking it.
 
-If a PVC is still `Terminating` after a timeout, something genuinely didn't go away — a
+If a PVC is still `Terminating` after a timeout — **5 minutes**, via `--pvc-timeout` —
+something genuinely didn't go away — a
 lingering pod, a stuck `VolumeAttachment`, a controller problem. Report it and exit
 non-zero rather than papering over it. Same shape as the Job deadline failure: name what's
 stuck, and suggest re-running once resolved.
@@ -935,7 +936,15 @@ Proceed? [y/N]
 
 Irreversible items first here too, and pod eviction — the recoverable part — last.
 
-Default to no. If stdin is not a TTY and `--yes` was not passed, fail rather than
+Default to no.
+
+**Read the answer from the controlling terminal, not from stdin.** stdin is not
+necessarily free: `-f -` consumes it for the node list, which is the pipeline §2
+advertises. Reading the confirmation from stdin there would see EOF, and the only way
+through would be `--yes` — turning the documented path into one that skips confirmation on
+a command that destroys data, which is exactly the coupling this section keeps apart.
+
+If there is no controlling terminal at all and `--yes` was not passed, fail rather than
 proceeding or hanging on a prompt nobody can answer.
 
 ---
@@ -970,7 +979,7 @@ needs a human.
 | Code | Meaning | Retry sensible? |
 |---|---|---|
 | `0` | Drain completed | — |
-| `1` | Error — API failure, unexpected condition | No |
+| `1` | Error — API failure, unexpected condition, or pods that cannot be drained | No |
 | `2` | Usage error — bad flags, unreadable node file | No |
 | `3` | Timed out waiting on Job pods (§5 phase 4) | Yes, on a timer |
 | `4` | Eviction timeout (§5 phase 2) — often a PDB stall | Only after investigating |
@@ -982,6 +991,18 @@ needs a human.
 | `130` | Interrupted (SIGINT) mid-run | Only after investigating |
 
 Codes 3 through 5 all leave nodes cordoned and are safe to resolve and re-run (§7).
+
+**Pods that cannot be drained exit `1`, not `3`.** A pod that arrives after the snapshot —
+one naming its node directly, which the cordon does not stop — is still on the node at
+phase 4's deadline. It is not a Job pod and will not finish on its own, so reporting `3`
+would tell a wrapper to retry on a timer something that needs a human, and each attempt
+would burn the full deadline. Only Job pods still running produce `3`.
+
+**Nodes cordoned but never drained are reported.** Phase 1 cordons the whole selection
+before any eviction, so a run that stops at node 2 of 5 has taken all five out of service.
+The run output names the untouched remainder with the `kubectl uncordon` command for each,
+in both the table and the JSON events — cordon is one-way, so silence about them is a
+worse failure than the one that stopped the run.
 
 **Aggregation under `--parallel`.** Different nodes can fail for different reasons in one
 run, and the spec must say which code wins. **Severity precedence, highest first:
@@ -1036,8 +1057,17 @@ the dishonesty the non-zero-exit rule exists to prevent.
   small number of list calls" means a fixed number of *paginated* list calls — set
   `metav1.ListOptions{Limit: 500}` and follow the `Continue` token for pods, PVCs, and PVs.
   The call count stays fixed per resource type; only page count varies with cluster size.
-- **Use a `Watch`, not polling Gets, for the phase 2 step-3 wait.** The delete event is
-  needed precisely, and it is one connection instead of N polls.
+- **The phase 2 step-3 wait polls; it does not `Watch`.** This section originally required a
+  `Watch`, on the grounds that the delete event is needed precisely and it is one connection
+  rather than N polls. The implementation polls a `Get` on the interval instead, and this
+  paragraph was rewritten to match it rather than the other way round — so read it as a
+  decision that was made late, not one that was designed.
+
+  The reasoning for keeping polling: the wait is bounded by `--eviction-timeout` and the pod
+  count per node is tens, not thousands, so the connection saving is small; and the "gone"
+  test is NotFound **or a changed UID**, which a `Get` answers directly while a watch stream
+  requires reconstructing it from event types. A `Watch` remains the better shape if per-node
+  pod counts ever grow, and the polling interval is `Options.PollInterval` if it needs tuning.
 - **Pin `client-go` to the oldest server minor targeted.** Currently **v0.35.8**, which
   under the ±1 skew policy supports Kubernetes **1.34 through 1.36** — the exact set the
   integration matrix exercises, and the range the GlueOps clusters fall in (k3s 1.34 and
