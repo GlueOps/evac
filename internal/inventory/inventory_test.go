@@ -55,7 +55,7 @@ func TestControlPlaneDetectionSignals(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gotCP, gotSignal := controlPlane(&tc.node)
+			gotCP, gotSignal := IsControlPlane(&tc.node)
 			if gotCP != tc.wantCP {
 				t.Errorf("controlPlane = %v, want %v", gotCP, tc.wantCP)
 			}

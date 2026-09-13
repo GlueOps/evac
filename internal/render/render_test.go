@@ -101,7 +101,13 @@ func build(t *testing.T, ns ...corev1.Node) []inventory.Node {
 
 // Show rather than hide — an operator who cannot find a node will go
 // looking, and silence is worse than an explanation.
-func TestNodeTableShowsControlPlaneNodesAnnotatedAsExcluded(t *testing.T) {
+//
+// The annotation says "not-drainable" rather than "excluded" because a
+// schedulable control plane node is emphatically not excluded from receiving
+// workload: on k3s it is untainted and will absorb everything evicted off the
+// agents. Reading "excluded" as "not involved" is what makes draining every
+// worker look safe.
+func TestNodeTableAnnotatesControlPlaneAsNotDrainableAndSchedulable(t *testing.T) {
 	t.Parallel()
 	cp := node("server-0", func(n *corev1.Node) {
 		n.Labels["node-role.kubernetes.io/control-plane"] = "true"
@@ -115,8 +121,28 @@ func TestNodeTableShowsControlPlaneNodesAnnotatedAsExcluded(t *testing.T) {
 	if !strings.Contains(out, "server-0") {
 		t.Error("control plane node was hidden from the inventory")
 	}
-	if !strings.Contains(out, "control-plane/excluded") {
-		t.Errorf("control plane node is not annotated as excluded:\n%s", out)
+	if !strings.Contains(out, "control-plane/not-drainable/schedulable") {
+		t.Errorf("control plane node is not annotated as a schedulable non-drain target:\n%s", out)
+	}
+	if strings.Contains(out, "excluded") {
+		t.Errorf("still says \"excluded\", which reads as \"not involved\":\n%s", out)
+	}
+}
+
+// A cordoned control plane node genuinely will not receive anything, so the
+// schedulable half of the annotation must drop off.
+func TestCordonedControlPlaneIsNotAdvertisedAsSchedulable(t *testing.T) {
+	t.Parallel()
+	cp := node("server-0", func(n *corev1.Node) {
+		n.Labels["node-role.kubernetes.io/control-plane"] = "true"
+		n.Spec.Unschedulable = true
+	})
+	var buf bytes.Buffer
+	if err := NodeTable(&buf, build(t, node("worker-1"), cp), NodeTableOptions{Width: 200}); err != nil {
+		t.Fatal(err)
+	}
+	if out := buf.String(); strings.Contains(out, "not-drainable/schedulable") {
+		t.Errorf("cordoned control plane advertised as schedulable:\n%s", out)
 	}
 }
 

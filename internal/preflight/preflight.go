@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/GlueOps/evac/internal/classify"
+	"github.com/GlueOps/evac/internal/inventory"
 	"github.com/GlueOps/evac/internal/scope"
 )
 
@@ -62,6 +63,7 @@ func Run(s *scope.Scope) *Results {
 
 	checkNotReady(res, s)
 	checkCapacity(res, s, remaining)
+	checkControlPlaneOnly(res, s, remaining)
 	checkNodeAffinity(res, s, remaining)
 	checkPodAntiAffinity(res, s, remaining)
 	return res
@@ -119,6 +121,121 @@ func hasBlockingTaint(n *corev1.Node) bool {
 	return false
 }
 
+// --- control plane as the only landing place --------------------------------
+
+// checkControlPlaneOnly blocks a drain that would put the entire workload on
+// control-plane nodes.
+//
+// remainingNodes counts a schedulable control-plane node as a landing place,
+// which is right for capacity arithmetic and wrong as a destination for
+// everything. On kubeadm this can never fire: the control plane carries
+// node-role.kubernetes.io/control-plane:NoSchedule, so hasBlockingTaint drops
+// it from `remaining` before this runs. On k3s the server node is untainted and
+// schedulable, so draining every agent silently relocates the whole cluster
+// onto the node running the API server, etcd and the scheduler — reported, up
+// to now, as "ok — moving X onto 1 remaining node(s)".
+//
+// Fatal rather than a warning: there is always --ignore-preflight for the
+// operator who means it, and a single-node install never reaches here because
+// its only node is control plane, which is refused from selection outright.
+func checkControlPlaneOnly(res *Results, s *scope.Scope, remaining []*corev1.Node) {
+	needCPU, needMem := movingRequests(s)
+	if needCPU.IsZero() && needMem.IsZero() {
+		return // nothing is being relocated, so where it would land is moot
+	}
+
+	var workers []*corev1.Node
+	var cpNames []string
+	for _, n := range remaining {
+		if cp, _ := inventory.IsControlPlane(n); cp {
+			cpNames = append(cpNames, n.Name)
+			continue
+		}
+		workers = append(workers, n)
+	}
+	if len(cpNames) == 0 {
+		return // the control plane is not a landing place here at all
+	}
+	sort.Strings(cpNames)
+
+	// The question is not "is every remaining node control plane" but "does the
+	// load actually end up there". A surviving worker with no headroom is the
+	// same incident: the scheduler fills it, then puts the rest on the control
+	// plane. Checking node identity alone made one tiny or fully booked agent
+	// enough to switch this guard off.
+	freeCPU, freeMem := freeOn(s, workers)
+	if needCPU.Cmp(freeCPU) <= 0 && needMem.Cmp(freeMem) <= 0 {
+		return
+	}
+
+	summary := fmt.Sprintf("evicted workload would land on control plane node(s): %s",
+		strings.Join(cpNames, ", "))
+	if len(workers) == 0 {
+		summary = fmt.Sprintf("only control plane node(s) would be left to run workloads: %s",
+			strings.Join(cpNames, ", "))
+	}
+
+	detail := []string{
+		fmt.Sprintf("%s cpu / %s memory has to move; the remaining worker(s) can take %s cpu / %s memory",
+			needCPU.String(), needMem.String(), freeCPU.String(), freeMem.String()),
+		"the rest lands on the node running the API server, etcd and the scheduler",
+		"on k3s the server node is untainted and schedulable, which is why the",
+		"capacity check counts it and reports this as fine",
+	}
+	detail = append(detail, unavailableWorkers(s, remaining)...)
+	detail = append(detail, "fix: free up or add a worker, or drop nodes from the selection")
+
+	res.Add(Finding{
+		Severity: Fatal,
+		Check:    "control-plane-only",
+		Summary:  summary,
+		Detail:   detail,
+	})
+}
+
+// unavailableWorkers explains which workers are not available to absorb the
+// load, and why each one is not.
+//
+// "the selection covers every worker" was false the moment a previous run left
+// a node cordoned, or a node went NotReady — both routine, because evac never
+// uncordons and a re-run is the documented recovery. Telling an operator to
+// drop nodes from a single-node selection is unactionable; telling them a
+// specific node is still cordoned from last time is not.
+func unavailableWorkers(s *scope.Scope, remaining []*corev1.Node) []string {
+	inRemaining := make(map[string]bool, len(remaining))
+	for _, n := range remaining {
+		inRemaining[n.Name] = true
+	}
+	selected := make(map[string]bool, len(s.Nodes))
+	for i := range s.Nodes {
+		selected[s.Nodes[i].Name] = true
+	}
+
+	var out []string
+	for i := range s.Snapshot.Nodes {
+		n := &s.Snapshot.Nodes[i]
+		if cp, _ := inventory.IsControlPlane(n); cp || inRemaining[n.Name] {
+			continue
+		}
+		var why string
+		switch {
+		case selected[n.Name]:
+			why = "in this selection"
+		case n.Spec.Unschedulable:
+			why = "already cordoned — uncordon it or finish the run that cordoned it"
+		case !nodeReady(n):
+			why = "NotReady"
+		case hasBlockingTaint(n):
+			why = "carries a NoSchedule taint"
+		default:
+			continue
+		}
+		out = append(out, fmt.Sprintf("worker %s is unavailable: %s", n.Name, why))
+	}
+	sort.Strings(out)
+	return out
+}
+
 // --- capacity --------------------------------------------------------------
 
 func checkCapacity(res *Results, s *scope.Scope, remaining []*corev1.Node) {
@@ -132,36 +249,8 @@ func checkCapacity(res *Results, s *scope.Scope, remaining []*corev1.Node) {
 		return
 	}
 
-	// What has to move.
-	needCPU, needMem := resource.Quantity{}, resource.Quantity{}
-	for _, r := range s.Pods {
-		if r.Class == classify.Excluded {
-			continue
-		}
-		cpu, mem := podRequests(r.Pod)
-		needCPU.Add(cpu)
-		needMem.Add(mem)
-	}
-
-	// What is free on the nodes that remain: allocatable minus what already
-	// runs there. Comparing against raw allocatable would ignore the existing
-	// workload and report capacity that does not exist.
-	remainingNames := make(map[string]bool, len(remaining))
-	freeCPU, freeMem := resource.Quantity{}, resource.Quantity{}
-	for _, n := range remaining {
-		remainingNames[n.Name] = true
-		freeCPU.Add(*n.Status.Allocatable.Cpu())
-		freeMem.Add(*n.Status.Allocatable.Memory())
-	}
-	for i := range s.Snapshot.Pods {
-		p := &s.Snapshot.Pods[i]
-		if !remainingNames[p.Spec.NodeName] || isTerminal(p) {
-			continue
-		}
-		cpu, mem := podRequests(p)
-		freeCPU.Sub(cpu)
-		freeMem.Sub(mem)
-	}
+	needCPU, needMem := movingRequests(s)
+	freeCPU, freeMem := freeOn(s, remaining)
 
 	var short []string
 	if needCPU.Cmp(freeCPU) > 0 {
@@ -185,9 +274,71 @@ func checkCapacity(res *Results, s *scope.Scope, remaining []*corev1.Node) {
 	res.Add(Finding{
 		Severity: Warning,
 		Check:    "capacity",
-		Summary: fmt.Sprintf("ok — moving %s cpu / %s memory onto %d remaining node(s)",
-			needCPU.String(), needMem.String(), len(remaining)),
+		Summary: fmt.Sprintf("ok — moving %s cpu / %s memory onto %d remaining node(s): %s",
+			needCPU.String(), needMem.String(), len(remaining), describeNodes(remaining)),
 	})
+}
+
+// describeNodes names where the workload is going, marking control-plane nodes.
+//
+// The anonymous form of this line — "onto 1 remaining node(s)" — is what an
+// operator read and believed while their whole cluster relocated onto the k3s
+// server. Naming the destination costs one clause and answers the question the
+// count provokes. Truncated because a large cluster would otherwise print a
+// paragraph where a reassurance belongs.
+func describeNodes(nodes []*corev1.Node) string {
+	const show = 3
+	names := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		name := n.Name
+		if cp, _ := inventory.IsControlPlane(n); cp {
+			name += " (control plane)"
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	if len(names) > show {
+		return strings.Join(names[:show], ", ") +
+			fmt.Sprintf(" and %d more", len(names)-show)
+	}
+	return strings.Join(names, ", ")
+}
+
+// movingRequests sums what the drain has to relocate. Excluded pods —
+// DaemonSets, Jobs, mirror pods — are never evicted and never reschedule, so
+// they are not part of the demand.
+func movingRequests(s *scope.Scope) (cpu, mem resource.Quantity) {
+	for _, r := range s.Pods {
+		if r.Class == classify.Excluded {
+			continue
+		}
+		c, m := podRequests(r.Pod)
+		cpu.Add(c)
+		mem.Add(m)
+	}
+	return cpu, mem
+}
+
+// freeOn sums headroom across nodes: allocatable minus what already runs
+// there. Comparing against raw allocatable would ignore the existing workload
+// and report capacity that does not exist.
+func freeOn(s *scope.Scope, nodes []*corev1.Node) (cpu, mem resource.Quantity) {
+	names := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		names[n.Name] = true
+		cpu.Add(*n.Status.Allocatable.Cpu())
+		mem.Add(*n.Status.Allocatable.Memory())
+	}
+	for i := range s.Snapshot.Pods {
+		p := &s.Snapshot.Pods[i]
+		if !names[p.Spec.NodeName] || isTerminal(p) {
+			continue
+		}
+		c, m := podRequests(p)
+		cpu.Sub(c)
+		mem.Sub(m)
+	}
+	return cpu, mem
 }
 
 // podRequests sums container requests, taking the larger of init and regular
@@ -515,6 +666,12 @@ func dedupe(in []string) []string {
 }
 
 // Summary renders a one-line result for each check.
+// checkWidth pads the check-name column. It must exceed the longest name in
+// use — currently control-plane-only at 18 — or that row loses its gutter and
+// the summary runs straight into the name. TestSummaryColumnFitsEveryCheckName
+// pins this.
+const checkWidth = 20
+
 func (r *Results) Summary() string {
 	var b strings.Builder
 	for _, f := range r.Findings {
@@ -527,9 +684,11 @@ func (r *Results) Summary() string {
 		default:
 			marker = "warn"
 		}
-		fmt.Fprintf(&b, "  %s  %-18s %s\n", marker, f.Check, f.Summary)
+		fmt.Fprintf(&b, "  %s  %-*s %s\n", marker, checkWidth, f.Check, f.Summary)
 		for _, d := range f.Detail {
-			fmt.Fprintf(&b, "          %s\n", d)
+			// Hang the detail under the summary rather than under the marker,
+			// so a multi-line explanation reads as one block.
+			fmt.Fprintf(&b, "  %s  %-*s %s\n", "    ", checkWidth, "", d)
 		}
 	}
 	return b.String()

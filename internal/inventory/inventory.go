@@ -95,7 +95,7 @@ func Build(snap *kube.Snapshot) []Node {
 			node:           n,
 		}
 		row.Ready, row.Uptime = readiness(n, snap.TakenAt)
-		row.ControlPlane, row.ControlPlaneSignal = controlPlane(n)
+		row.ControlPlane, row.ControlPlaneSignal = IsControlPlane(n)
 		row.Pods, row.PVCs = counts(podsByNode[n.Name])
 		out = append(out, row)
 	}
@@ -145,13 +145,16 @@ func readiness(n *corev1.Node, now time.Time) (ready bool, uptime time.Duration)
 	return false, 0
 }
 
-// controlPlane detects a control-plane node.
+// IsControlPlane detects a control-plane node.
+//
+// Exported because preflight needs the same answer for a raw corev1.Node, and
+// a second copy of these signals would be a second thing to keep in step.
 //
 // On k3s only the label fires: the server node carries
 // node-role.kubernetes.io/control-plane but no taint at all, and is fully
 // schedulable. The taint check is therefore a belt-and-braces path for kubeadm
 // rather than the primary signal.
-func controlPlane(n *corev1.Node) (bool, string) {
+func IsControlPlane(n *corev1.Node) (bool, string) {
 	for _, l := range []string{labelControlPlane, labelMaster, labelEtcd} {
 		if _, ok := n.Labels[l]; ok {
 			return true, "label " + l

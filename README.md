@@ -133,10 +133,15 @@ appears, so it cannot cleanly bind and the controller waits instead of wedging.
 | **Idempotent** | No checkpoints. Every operation is convergent and scope is re-derived from live state, so a failed run is recovered by running it again. |
 | **Audited by default** | Every run writes a timestamped `./evac-<context>-<time>.log` in addition to stdout, unless `--no-log-file` is passed or `--log-file` redirects it. `--output=json` emits the same events. |
 
-Preflight blocks the drain on capacity shortfalls and on affinity traps — the case where the
-nodes you selected are the only ones a workload is allowed to run on. `--yes` skips the
-confirmation prompt but **does not** bypass preflight; `--ignore-preflight` does, and logs
-loudly what it overrode.
+Preflight blocks the drain on capacity shortfalls, on affinity traps — the case where the
+nodes you selected are the only ones a workload is allowed to run on — and on a selection that
+would leave a control plane node as the only place anything can be scheduled. That last one
+matters on k3s, where the server node is untainted and schedulable: draining every agent
+otherwise relocates the whole cluster onto the node running the API server, and the capacity
+arithmetic happily reports it as fine.
+
+`--yes` skips the confirmation prompt but **does not** bypass preflight; `--ignore-preflight`
+does, and logs loudly what it overrode.
 
 ## Exit codes
 

@@ -88,7 +88,15 @@ func status(n inventory.Node) string {
 		parts = append(parts, "Cordoned")
 	}
 	if n.ControlPlane {
-		parts = append(parts, "control-plane/excluded")
+		// "excluded" alone reads as "not involved", which is the belief that
+		// lets an operator drain every worker on k3s and be surprised when the
+		// workload lands here. It is excluded from draining, not from
+		// scheduling — and on k3s it is schedulable and will receive pods.
+		if n.Schedulable {
+			parts = append(parts, "control-plane/not-drainable/schedulable")
+		} else {
+			parts = append(parts, "control-plane/not-drainable")
+		}
 	}
 	return strings.Join(parts, ",")
 }

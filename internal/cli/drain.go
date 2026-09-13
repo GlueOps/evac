@@ -16,6 +16,7 @@ import (
 
 	"github.com/GlueOps/evac/internal/drain"
 	"github.com/GlueOps/evac/internal/exitcode"
+	"github.com/GlueOps/evac/internal/inventory"
 	"github.com/GlueOps/evac/internal/lock"
 	"github.com/GlueOps/evac/internal/output"
 	"github.com/GlueOps/evac/internal/preflight"
@@ -186,7 +187,7 @@ maintenance work is done.`,
 			if res.Failed() {
 				return exitcode.Wrap(res.Code(), reportedErr(res))
 			}
-			rec.Infof("", "", "drain complete — nodes remain cordoned; uncordon with kubectl when maintenance is done")
+			reportCordoned(rec, sel.Nodes)
 			return nil
 		},
 	}
@@ -344,6 +345,24 @@ func reportOutcome(rec *output.Recorder, res drain.Result) {
 		for _, n := range skipped {
 			fmt.Fprintf(&b, "    kubectl uncordon %s\n", n)
 		}
+	}
+	rec.Raw(b.String())
+}
+
+// reportCordoned says what is still out of service and hands over the commands
+// to put it back.
+//
+// Cordon is one-way and evac never uncordons, so a successful drain still
+// leaves every selected node unschedulable. The failure path already prints
+// these commands per node; printing a sentence instead on success had it
+// backwards, because success is the case where the operator is finished and
+// wants their cluster back.
+func reportCordoned(rec *output.Recorder, nodes []inventory.Node) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "\ndrain complete — %d node(s) remain cordoned. Uncordon when the\n"+
+		"maintenance work is done:\n", len(nodes))
+	for i := range nodes {
+		fmt.Fprintf(&b, "    kubectl uncordon %s\n", nodes[i].Name)
 	}
 	rec.Raw(b.String())
 }
