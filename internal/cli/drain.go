@@ -267,8 +267,11 @@ func confirm(cmd *cobra.Command, rec *output.Recorder, sc *scope.Scope, yes bool
 // form work: stdin is the node list, but the operator is still sitting there.
 func openTerminal() (*os.File, error) {
 	if term.IsTerminal(int(os.Stdin.Fd())) {
-		// A separate *os.File over the same descriptor, so the caller's
-		// deferred Close cannot close the real stdin out from under anything.
+		// Known defect, left as-is deliberately: os.NewFile wraps fd 0 rather
+		// than duplicating it, so the caller's deferred Close closes the
+		// process's real stdin and the next file opened lands on fd 0. It is
+		// survivable only because nothing reads stdin after the confirmation.
+		// The fix is a dup(2) here; do not trust this to be a separate handle.
 		return os.NewFile(os.Stdin.Fd(), "/dev/stdin"), nil
 	}
 	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)

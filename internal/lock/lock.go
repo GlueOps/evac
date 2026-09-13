@@ -52,11 +52,7 @@ func (e *HeldError) Error() string {
 // Lock is a held advisory file lock.
 type Lock struct {
 	file *os.File
-	path string
 }
-
-// Path returns the lock file path.
-func (l *Lock) Path() string { return l.path }
 
 // Acquire takes the lock, or fails immediately if another run holds it.
 //
@@ -124,7 +120,7 @@ func AcquireAt(path, context string) (*Lock, error) {
 		os.Getpid(), context, time.Now().UTC().Format(time.RFC3339))
 	_ = f.Sync()
 
-	return &Lock{file: f, path: path}, nil
+	return &Lock{file: f}, nil
 }
 
 // Release drops the lock. The kernel would do this on exit anyway; doing it
