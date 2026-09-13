@@ -28,10 +28,14 @@ archives:
 checksum:
   name_template: checksums.txt
 
-# Release notes come from GitHub's own generator, driven by the PR labeller in
-# .github/configs/labeler.yml — which is managed by external automation and must
-# not be edited here. `mode: append` attaches the binaries to that release
-# rather than overwriting its body.
+# release-please owns the changelog and creates the GitHub release when its
+# release PR merges; the tag it pushes is what triggers this workflow. So
+# goreleaser must not generate notes of its own, and must attach binaries to the
+# release that already exists rather than replacing it.
+#
+# The App-token tag push is what makes this work at all: GitHub does not trigger
+# workflows from GITHUB_TOKEN events, so a GITHUB_TOKEN-created tag would never
+# reach this build.
 changelog:
   disable: true
 
