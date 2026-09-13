@@ -63,7 +63,13 @@
     ".": {
       "release-type": "go",
       "package-name": "evac",
-      "initial-version": "0.1.0"
+      "initial-version": "0.1.0",
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "README.md"
+        }
+      ]
     }
   },
   "bump-minor-pre-major": true

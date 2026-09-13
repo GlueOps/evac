@@ -42,6 +42,13 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # Named once: the upload below and the install command in the PR comment
+      # must agree, and a drift between them is invisible until someone tries it.
+      ARTIFACT_NAME: evac-pr-${{ github.event.pull_request.number || github.ref_name }}-${{ github.sha }}
+      # The checkout above is a detached HEAD, so goreleaser cannot work the
+      # branch out for itself and stamps the literal "HEAD" instead.
+      EVAC_BRANCH: ${{ github.head_ref || github.ref_name }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -75,7 +82,7 @@ jobs:
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: evac-pr-${{ github.event.pull_request.number || github.ref_name }}-${{ github.sha }}
+          name: ${{ env.ARTIFACT_NAME }}
           path: |
             dist/*.tar.gz
             dist/checksums.txt
@@ -90,6 +97,7 @@ jobs:
         with:
           script: |
             const marker = '<!-- evac-pr-build -->';
+            const repo = context.repo.owner + '/' + context.repo.repo;
             const body = [
               marker,
               '**PR build** — binaries for `' + context.payload.pull_request.head.sha.slice(0, 7) + '`',
@@ -98,6 +106,20 @@ jobs:
               '',
               '[Download from the run](' + context.payload.repository.html_url +
                 '/actions/runs/' + context.runId + ')',
+              '',
+              '**Install this build on Linux:**',
+              '',
+              '```sh',
+              'gh run download ' + context.runId + ' --repo ' + repo +
+                ' -n ' + process.env.ARTIFACT_NAME + ' --dir /tmp/evac-pr \\',
+              '  && tar -xzf /tmp/evac-pr/evac_*_linux_$(uname -m | ' +
+                "sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz -C /tmp/evac-pr evac \\",
+              '  && sudo install -m 0755 /tmp/evac-pr/evac /usr/local/bin/evac',
+              '```',
+              '',
+              'This needs the [GitHub CLI](https://cli.github.com) — workflow artifacts are',
+              'not anonymously downloadable, so `curl` alone cannot reach them. Released',
+              'builds install with a plain `curl`; see the README.',
               '',
               'Unreleased build of unmerged code — `evac version` reports the branch and',
               'commit, not a release tag. Expires in 7 days.',

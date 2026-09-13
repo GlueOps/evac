@@ -28,7 +28,12 @@ builds:
 snapshot:
   # Branch names contain slashes (feat/evac-v1), which would turn the archive
   # name into a nested path. Flatten them.
-  version_template: '0.0.0-{{ replace .Branch "/" "-" }}.{{ .ShortCommit }}'
+  #
+  # EVAC_BRANCH overrides .Branch because CI checks out a detached HEAD, where
+  # .Branch resolves to the literal "HEAD" and the branch name — the thing an
+  # operator needs when several PR builds are circulating — is lost. The
+  # workflow sets it; a local `make snapshot` falls back to the real branch.
+  version_template: '0.0.0-{{ replace (envOrDefault "EVAC_BRANCH" .Branch) "/" "-" }}.{{ .ShortCommit }}'
 
 archives:
   - formats: [tar.gz]

@@ -30,6 +30,26 @@ volume-source guard off. A guard with an escape hatch is a guard someone types p
 
 ## Install
 
+### Linux, one command
+
+<!-- x-release-please-start-version -->
+```sh
+VERSION=0.1.0
+curl -fsSL "https://github.com/GlueOps/evac/releases/download/v${VERSION}/evac_${VERSION}_linux_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" \
+  | tar -xzf - evac && sudo install -m 0755 evac /usr/local/bin/evac && rm evac
+```
+<!-- x-release-please-end -->
+
+`evac` is then on your `PATH` at `/usr/local/bin/evac` — check with `evac version`. The
+`uname` expression picks amd64 or arm64 for you. Use `wget -qO-` in place of `curl -fsSL` if
+that is what you have, and drop everything after `tar` to leave the binary in the current
+directory instead of installing it system-wide.
+
+The version above is rewritten by release-please on every release, so it always names the
+current one. To pin a different release, set `VERSION` yourself.
+
+### With Go
+
 ```sh
 go install github.com/GlueOps/evac/cmd/evac@latest
 ```
@@ -39,7 +59,10 @@ The `/cmd/evac` suffix is required: the module root holds no `main` package, so 
 case-sensitive, and a lowercase path fails with
 `module declares its path as: github.com/GlueOps/evac`.
 
-Or download a binary from [releases](https://github.com/GlueOps/evac/releases).
+### By hand
+
+Every release carries linux and darwin builds for amd64 and arm64, plus `checksums.txt`:
+[releases](https://github.com/GlueOps/evac/releases).
 
 ## Use
 
