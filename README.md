@@ -76,6 +76,12 @@ evac drain                 # plan, confirm, execute
 `plan` and `drain` read a per-context node file when `-f` is omitted, so the common path is
 `evac nodes -i` followed by a bare `evac drain`.
 
+That file lives in your state directory, not the working directory:
+`${XDG_STATE_HOME:-~/.local/state}/evac/nodes-<context>.txt`. Keeping it out of the
+working directory means the selection does not depend on which directory you run from, and
+an operational file never lands in a source tree where it could be committed by accident.
+`-o` writes it somewhere else; `-f` reads from somewhere else.
+
 Selection can also be given directly, and `-f -` reads stdin:
 
 ```sh

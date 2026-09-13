@@ -37,10 +37,78 @@ func TestSanitize(t *testing.T) {
 }
 
 func TestDefaultPathIsPerContext(t *testing.T) {
-	t.Parallel()
-	a, b := DefaultPath("cluster-a"), DefaultPath("cluster-b")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	a, err := DefaultPath("cluster-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := DefaultPath("cluster-b")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if a == b {
 		t.Error("two contexts produced the same path; selecting for one cluster would overwrite the other's list")
+	}
+}
+
+// The node file must not land in the working directory. It used to, which put
+// an operational file into whatever source tree the operator happened to be
+// standing in — committable by accident — and made the selection depend on
+// which directory `evac drain` was run from.
+func TestDefaultPathIsOutsideTheWorkingDirectory(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+
+	got, err := DefaultPath("k3d-evac-dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(got) {
+		t.Errorf("DefaultPath = %q, want an absolute path", got)
+	}
+	if !strings.HasPrefix(got, filepath.Join(state, "evac")+string(filepath.Separator)) {
+		t.Errorf("DefaultPath = %q, want it under %s/evac", got, state)
+	}
+	if strings.Contains(got, "./") {
+		t.Errorf("DefaultPath = %q, want no working-directory component", got)
+	}
+}
+
+// With XDG_STATE_HOME unset it falls back to ~/.local/state, still outside the
+// working directory.
+func TestDefaultPathFallsBackToTheHomeStateDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("HOME", home)
+
+	got, err := DefaultPath("c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(home, ".local", "state", "evac")
+	if !strings.HasPrefix(got, want+string(filepath.Separator)) {
+		t.Errorf("DefaultPath = %q, want it under %s", got, want)
+	}
+}
+
+// Write creates the state directory; it does not exist on a first run.
+func TestWriteCreatesTheStateDirectory(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+
+	path, err := DefaultPath("c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(path, "c", []string{"node-a"}); err != nil {
+		t.Fatalf("Write into a directory that does not exist yet: %v", err)
+	}
+	f, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Nodes) != 1 || f.Nodes[0] != "node-a" {
+		t.Errorf("Nodes = %v, want [node-a]", f.Nodes)
 	}
 }
 

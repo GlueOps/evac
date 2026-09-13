@@ -35,7 +35,11 @@ func runPicker(cmd *cobra.Command, cl *kube.Client, nodes []inventory.Node, take
 	}
 	path := outPath
 	if path == "" {
-		path = nodefile.DefaultPath(cl.Context)
+		p, err := nodefile.DefaultPath(cl.Context)
+		if err != nil {
+			return exitcode.Wrap(exitcode.Error, err)
+		}
+		path = p
 	}
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs

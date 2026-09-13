@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
@@ -68,12 +69,16 @@ func (sf *selectionFlags) resolve(cmd *cobra.Command, g *globals, refuseControlP
 	// followed by a bare `evac drain` the common path.
 	usedDefault := req.Empty()
 	if usedDefault {
-		req.File = nodefile.DefaultPath(cl.Context)
+		p, err := nodefile.DefaultPath(cl.Context)
+		if err != nil {
+			return nil, nil, nil, exitcode.Wrap(exitcode.Usage, err)
+		}
+		req.File = p
 	}
 
 	sel, err := selection.Resolve(req, all, refuseControlPlane)
 	if err != nil {
-		return nil, nil, nil, classifySelectionError(err, req.File, usedDefault)
+		return nil, nil, nil, classifySelectionErrorIn(err, req.File, usedDefault, cl.Context)
 	}
 	if len(sel.Nodes) == 0 {
 		return nil, nil, nil, exitcode.Wrap(exitcode.Usage, fmt.Errorf("no drainable nodes selected"))
@@ -92,6 +97,15 @@ func (sf *selectionFlags) resolve(cmd *cobra.Command, g *globals, refuseControlP
 // given and the default node file  was not usable" with an empty path, after
 // the operator had plainly given a selection.
 func classifySelectionError(err error, path string, usedDefault bool) error {
+	return classifySelectionErrorIn(err, path, usedDefault, "")
+}
+
+func fileExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && st.Mode().IsRegular()
+}
+
+func classifySelectionErrorIn(err error, path string, usedDefault bool, contextName string) error {
 	var cp *selection.ControlPlaneInFileError
 	if asControlPlaneErr(err, &cp) {
 		return exitcode.Wrap(exitcode.ControlPlane, fmt.Errorf(
@@ -102,11 +116,17 @@ func classifySelectionError(err error, path string, usedDefault bool) error {
 		if abs, aerr := filepath.Abs(path); aerr == nil {
 			shown = abs
 		}
+		hint := "Run `evac nodes -i` to choose nodes, or pass --nodes/--selector/-f"
+		if legacy := nodefile.LegacyPath(contextName); fileExists(legacy) {
+			abs, aerr := filepath.Abs(legacy)
+			if aerr != nil {
+				abs = legacy
+			}
+			hint = fmt.Sprintf("There is an older node file here, from when evac kept them in the\n"+
+				"working directory:\n  %s\nPass `-f %s` to use it, or run `evac nodes -i` to choose again.", abs, legacy)
+		}
 		return exitcode.Wrap(exitcode.Usage, fmt.Errorf(
-			"%w\n\nNo node selection given, and the default node file was not usable:\n  %s\n"+
-				"That path is relative to the current directory — if you ran `evac nodes -i`\n"+
-				"somewhere else, pass -f <that file>.\n"+
-				"Otherwise run `evac nodes -i` to choose nodes, or pass --nodes/--selector/-f", err, shown))
+			"%w\n\nNo node selection given, and the default node file was not usable:\n  %s\n%s", err, shown, hint))
 	}
 	return exitcode.Wrap(exitcode.Usage, err)
 }

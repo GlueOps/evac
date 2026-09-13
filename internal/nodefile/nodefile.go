@@ -26,11 +26,49 @@ type File struct {
 	Path string
 }
 
-// DefaultPath returns the per-context node file path.
+// DefaultPath returns the per-context node file path, under the user's state
+// directory rather than the working directory.
 //
 // Per-context rather than a fixed name because selecting for cluster B would
 // otherwise silently overwrite the list for cluster A.
-func DefaultPath(context string) string {
+//
+// It used to be ./evac-nodes-<context>.txt, which had two problems. It landed
+// in whatever directory the operator happened to be in, so running the picker
+// in one place and `evac drain` in another silently found a different file or
+// none — and a stale one from a previous session was indistinguishable from a
+// fresh selection. And it dropped an operational file into source trees, where
+// it could be committed by accident.
+//
+// $XDG_STATE_HOME, not $XDG_CONFIG_HOME: a node selection is transient state
+// belonging to one maintenance window, not configuration anyone would keep or
+// hand-edit into version control.
+func DefaultPath(context string) (string, error) {
+	dir, err := StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "nodes-"+Sanitize(context)+".txt"), nil
+}
+
+// StateDir is where evac keeps per-context node files.
+func StateDir() (string, error) {
+	if d := os.Getenv("XDG_STATE_HOME"); d != "" {
+		return filepath.Join(d, "evac"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("locating the state directory: %w (set XDG_STATE_HOME, or pass -f)", err)
+	}
+	return filepath.Join(home, ".local", "state", "evac"), nil
+}
+
+// LegacyPath is the pre-XDG location: the node file in the current directory.
+//
+// Only used to tell an operator where their old selection went. Reading it
+// automatically would reintroduce exactly the surprise the move fixes — a file
+// in whatever directory you happen to be standing in, quietly becoming the
+// default selection for a destructive command.
+func LegacyPath(context string) string {
 	return "./evac-nodes-" + Sanitize(context) + ".txt"
 }
 
@@ -125,6 +163,11 @@ func parse(r io.Reader) (*File, error) {
 // act on.
 func Write(path, context string, nodes []string) error {
 	dir := filepath.Dir(path)
+	// 0700: the state directory is per-user and the file names the nodes of a
+	// cluster someone is about to drain.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("creating node file directory %s: %w", dir, err)
+	}
 	tmp, err := os.CreateTemp(dir, ".evac-nodes-*")
 	if err != nil {
 		return fmt.Errorf("creating node file: %w", err)
