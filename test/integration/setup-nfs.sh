@@ -21,6 +21,11 @@ NFS_CONTAINER="evac-nfs-${CONTEXT#k3d-}"
 # Pinned by digest: ":latest" for a test fixture means a green suite can turn
 # red with no change to this repository.
 # renovate: datasource=docker depName=janeczku/nfs-ganesha versioning=docker
+# The throwaway container used only to probe the NFS port. Pinned for the same
+# reason as everything else here: a test fixture on a floating tag can turn a
+# green suite red with no change to this repository.
+# renovate: datasource=docker depName=alpine versioning=docker
+PROBE_IMAGE="alpine:latest@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
 NFS_IMAGE="janeczku/nfs-ganesha:latest@sha256:17fe1813fd20d9fdfa497a26c8a2e39dd49748cd39dbb0559df7627d9bcf4c53"
 K=(kubectl --context "${CONTEXT}")
 
@@ -43,13 +48,13 @@ fi
 # races the server produces a confusing provisioning error much later.
 echo "    waiting for ${NFS_IP}:2049"
 for _ in $(seq 1 30); do
-  if docker run --rm --network "${NETWORK}" alpine \
+  if docker run --rm --network "${NETWORK}" "${PROBE_IMAGE}" \
       sh -c "nc -z -w2 ${NFS_IP} 2049" >/dev/null 2>&1; then
     break
   fi
   sleep 2
 done
-if ! docker run --rm --network "${NETWORK}" alpine \
+if ! docker run --rm --network "${NETWORK}" "${PROBE_IMAGE}" \
     sh -c "nc -z -w2 ${NFS_IP} 2049" >/dev/null 2>&1; then
   echo "NFS server never started serving on 2049" >&2
   docker logs "${NFS_CONTAINER}" >&2 || true
@@ -66,8 +71,11 @@ trap 'rm -rf "${TMP}"' EXIT
 # with cluster-wide RBAC, so what it installs must not change between runs.
 # renovate: datasource=github-releases depName=kubernetes-csi/csi-driver-nfs
 CSI_NFS_VERSION="v4.13.4"
-git clone -q --depth 1 --branch "${CSI_NFS_VERSION}" \
-  https://github.com/kubernetes-csi/csi-driver-nfs.git "${TMP}/csi"
+# The commit that tag pointed at when it was pinned. Tags are mutable, and
+# these manifests carry cluster-wide RBAC, so the checkout is by SHA.
+CSI_NFS_SHA="f09798c0f1e7d1ae3b32dc8dfef67f6e848e8761"
+git clone -q https://github.com/kubernetes-csi/csi-driver-nfs.git "${TMP}/csi"
+git -C "${TMP}/csi" checkout -q "${CSI_NFS_SHA}"
 for f in rbac-csi-nfs csi-nfs-driverinfo csi-nfs-controller csi-nfs-node; do
   "${K[@]}" apply -f "${TMP}/csi/deploy/${f}.yaml" >/dev/null
 done

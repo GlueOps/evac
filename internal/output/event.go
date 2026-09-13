@@ -143,6 +143,14 @@ func (d Diagnostic) Text(withDate bool) string {
 	}
 	b.WriteString("  ERROR  ")
 	b.WriteString(d.Headline)
+	// Under --parallel these blocks interleave, and three of the four used to
+	// render without any attribution at all — leaving the operator to guess
+	// which node a failure belonged to.
+	if d.Node != "" && !strings.Contains(d.Headline, d.Node) {
+		b.WriteString("  [node ")
+		b.WriteString(d.Node)
+		b.WriteString("]")
+	}
 	b.WriteString("\n\n")
 
 	for _, line := range d.Detail {

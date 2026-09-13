@@ -39,11 +39,13 @@ jobs:
         env:
           # renovate: datasource=github-releases depName=k3d-io/k3d
           K3D_VERSION: v5.9.0
+          # The commit v5.9.0 pointed at when this was pinned. A git tag is
+          # mutable — upstream can move it — and this pipes a remote script
+          # into a shell, so the URL is fetched by SHA. TAG still selects which
+          # release binary the script then installs.
+          K3D_INSTALL_SHA: 15dd1e2dbd62c53ed990fce9b7332335e8cb053c
         run: |
-          # Pinned to a tag rather than main: this pipes a remote script into a
-          # shell, so the content must not be able to change under us between
-          # runs. TAG makes the installer fetch that exact release.
-          curl -sfL "https://raw.githubusercontent.com/k3d-io/k3d/${K3D_VERSION}/install.sh" \
+          curl -sfL "https://raw.githubusercontent.com/k3d-io/k3d/${K3D_INSTALL_SHA}/install.sh" \
             | TAG="${K3D_VERSION}" bash
 
       - name: create throwaway cluster

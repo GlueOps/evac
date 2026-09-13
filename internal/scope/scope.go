@@ -27,17 +27,50 @@ type Scope struct {
 	Snapshot *kube.Snapshot
 }
 
-// PVCTarget is one claim considered for deletion, tied to the pod that put it
+// PVCTarget is one claim considered for deletion, tied to the pods that put it
 // in scope.
 type PVCTarget struct {
 	PVC *corev1.PersistentVolumeClaim
+	// Pod is the first in-scope pod found referencing the claim, used for
+	// display. Deletion is driven by Pods below.
 	Pod *corev1.Pod
+	// Pods is every in-scope pod referencing this claim.
+	//
+	// A ReadWriteOnce local volume may legitimately be mounted by more than one
+	// pod on the same node, and attributing the claim to just one of them meant
+	// the delete was issued while another pod still held the pvc-protection
+	// finalizer — a guaranteed five-minute stall, exit 5, and a claim left
+	// marked for deletion underneath a pod that is still running.
+	Pods []*corev1.Pod
 	// Decision is the per-PVC volume-source verdict.
 	Decision guard.Decision
 	// AlreadyDeleting is true when the PVC already carries a deletionTimestamp.
 	// §7 treats that as self-evidently unfinished work from a previous run: the
 	// delete is skipped and the flow proceeds straight to eviction.
 	AlreadyDeleting bool
+}
+
+// LastConsumer reports whether pod is the final referencing pod still to be
+// moved, given the set of pods already handled.
+//
+// Only then is it meaningful to wait for the claim to disappear: while another
+// selected pod still references it, pvc-protection holding it is the correct
+// state rather than a stall. "Last" cannot be decided from the list alone —
+// consumers may be split across phase 2 and phase 3, and under --parallel
+// across nodes for a ReadWriteMany volume — so it is answered from what has
+// actually been moved.
+//
+// moved is keyed by namespace/name.
+func (t PVCTarget) LastConsumer(pod *corev1.Pod, moved map[string]bool) bool {
+	for _, p := range t.Pods {
+		if p.Namespace == pod.Namespace && p.Name == pod.Name {
+			continue
+		}
+		if !moved[p.Namespace+"/"+p.Name] {
+			return false
+		}
+	}
+	return true
 }
 
 // Deletable reports whether this PVC will actually be deleted, accounting for
@@ -113,7 +146,7 @@ func discoverPVCs(snap *kube.Snapshot, pods []classify.Result) []PVCTarget {
 	scIndex := guard.IndexStorageClasses(snap.StorageClasses)
 
 	var out []PVCTarget
-	seen := make(map[string]bool)
+	seen := make(map[string]int)
 
 	for _, res := range pods {
 		// Excluded pods are not evicted, so their claims are not in scope.
@@ -125,17 +158,22 @@ func discoverPVCs(snap *kube.Snapshot, pods []classify.Result) []PVCTarget {
 				continue
 			}
 			key := res.Pod.Namespace + "/" + vol.PersistentVolumeClaim.ClaimName
-			if seen[key] {
+			if idx, ok := seen[key]; ok {
+				// Already in scope via another pod: record this one too rather
+				// than dropping it, so the verification step knows when the
+				// last consumer has gone.
+				out[idx].Pods = append(out[idx].Pods, res.Pod)
 				continue
 			}
 			pvc, ok := pvcsByKey[key]
 			if !ok {
 				continue // referenced but absent; nothing to delete
 			}
-			seen[key] = true
+			seen[key] = len(out)
 			out = append(out, PVCTarget{
 				PVC:             pvc,
 				Pod:             res.Pod,
+				Pods:            []*corev1.Pod{res.Pod},
 				Decision:        guard.Evaluate(pvc, pvIndex, scIndex),
 				AlreadyDeleting: pvc.DeletionTimestamp != nil,
 			})

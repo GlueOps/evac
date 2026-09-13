@@ -186,3 +186,26 @@ func itoa(i int) string {
 	}
 	return string(b)
 }
+
+// Only a genuine conflict is a HeldError. Everything else — an unwritable
+// directory, a lock file owned by another user — must be distinguishable, or
+// the CLI reports exit 8 and a wrapper waits for a drain that does not exist.
+func TestNonConflictFailuresAreNotHeldErrors(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	// A directory where the lock file cannot be created.
+	ro := filepath.Join(dir, "readonly")
+	if err := os.Mkdir(ro, 0o500); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := AcquireAt(filepath.Join(ro, "evac.lock"), "ctx")
+	if err == nil {
+		t.Skip("running as a user who can write to a 0500 directory")
+	}
+	var held *HeldError
+	if errors.As(err, &held) {
+		t.Errorf("an unwritable directory was reported as a held lock: %v", err)
+	}
+}

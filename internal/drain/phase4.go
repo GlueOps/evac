@@ -29,7 +29,7 @@ func (e *Engine) phase4(ctx context.Context, node string, drainStart time.Time) 
 	for {
 		remaining, jobs, err := e.pollNode(ctx, node)
 		if err != nil {
-			return exitcode.Wrap(exitcode.Error, err)
+			return wrapAPIError(err)
 		}
 		if len(remaining) == 0 && len(jobs) == 0 {
 			e.rec.Infof("4", node, "no evictable or Job pods remain")

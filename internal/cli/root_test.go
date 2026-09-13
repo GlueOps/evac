@@ -52,3 +52,22 @@ func TestExplicitCodesSurviveClassification(t *testing.T) {
 		}
 	}
 }
+
+// A substring match over these phrases also caught API failures whose text
+// merely contains one — a dial failure reporting "connect: invalid argument"
+// became exit 2, telling the operator their invocation was wrong when the
+// cluster was unreachable.
+func TestAPIFailuresAreNotReclassifiedAsUsageErrors(t *testing.T) {
+	t.Parallel()
+	for _, msg := range []string{
+		"listing nodes: dial tcp 10.0.0.1:6443: connect: invalid argument",
+		"deleting pvc app/data-0: etcdserver: request timed out",
+		"evicting app/web-0: unknown command in server response",
+		"listing pods: the server could not find the requested resource",
+	} {
+		if got := classify(errors.New(msg)); got != exitcode.Error {
+			t.Errorf("classify(%q) = %d, want %d — a cluster failure was reported as the operator's mistake",
+				msg, got, exitcode.Error)
+		}
+	}
+}

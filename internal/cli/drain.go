@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -67,7 +68,17 @@ maintenance work is done.`,
 
 			lk, err := lock.Acquire(cl.Target())
 			if err != nil {
-				return exitcode.Wrap(exitcode.LockHeld, err)
+				// Exit 8 means "another drain holds the lock", which §9 tells a
+				// wrapper is worth retrying shortly. Acquire also fails for
+				// reasons that will never clear on their own — a read-only
+				// XDG_RUNTIME_DIR, a lock file owned by someone else — and
+				// reporting those as 8 sends the wrapper into a wait for a
+				// drain that does not exist.
+				var held *lock.HeldError
+				if errors.As(err, &held) {
+					return exitcode.Wrap(exitcode.LockHeld, err)
+				}
+				return exitcode.Wrap(exitcode.Error, err)
 			}
 			// A release failure is not actionable — the kernel drops the
 			// flock when this process exits regardless.
@@ -174,7 +185,7 @@ maintenance work is done.`,
 				return runErr
 			}
 			if res.Failed() {
-				return exitcode.Wrap(res.Code(), firstErr(res))
+				return exitcode.Wrap(res.Code(), reportedErr(res))
 			}
 			rec.Infof("", "", "drain complete — nodes remain cordoned; uncordon with kubectl when maintenance is done")
 			return nil
@@ -335,7 +346,20 @@ func reportOutcome(rec *output.Recorder, res drain.Result) {
 	rec.Raw(b.String())
 }
 
-func firstErr(res drain.Result) error {
+// reportedErr returns the error belonging to the node whose exit code is being
+// reported.
+//
+// Taking the first failure in slice order instead meant that under --parallel,
+// stderr could describe node A's job-wait timeout while the process exited with
+// node B's code — a human reading the message and a wrapper reading the code
+// would reach different conclusions about the same run.
+func reportedErr(res drain.Result) error {
+	code := res.Code()
+	for _, n := range res.Nodes {
+		if !n.Skipped && n.Err != nil && n.Code == code {
+			return n.Err
+		}
+	}
 	for _, n := range res.Nodes {
 		if n.Err != nil {
 			return n.Err

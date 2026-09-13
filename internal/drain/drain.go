@@ -12,6 +12,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -63,11 +65,21 @@ type Engine struct {
 	scope  *scope.Scope
 	// rerun is the command to suggest in failure diagnostics.
 	rerun string
+
+	// moved records the pods already taken off their node, keyed by
+	// namespace/name. A claim shared by several pods can only be verified gone
+	// once the last of them has moved, and under --parallel that answer is
+	// written by one worker and read by another.
+	movedMu sync.Mutex
+	moved   map[string]bool
 }
 
 // New builds an Engine.
 func New(client kubernetes.Interface, rec *output.Recorder, sc *scope.Scope, opts Options, rerun string) *Engine {
-	return &Engine{client: client, rec: rec, opts: opts, scope: sc, rerun: rerun}
+	return &Engine{
+		client: client, rec: rec, opts: opts, scope: sc, rerun: rerun,
+		moved: make(map[string]bool),
+	}
 }
 
 // NodeResult is the outcome for one node.
@@ -193,26 +205,48 @@ func (e *Engine) runParallel(ctx context.Context) Result {
 	jobs := make(chan job)
 	results := make(chan NodeResult, len(e.scope.Nodes))
 
+	// Set by the first worker to fail. §5 asks for both halves of this: workers
+	// already running finish the node they are on, but no NEW node is started.
+	// Dispatching regardless meant a failure on node 1 still drained nodes 5
+	// through 12 — serial mode stops, and the asymmetry was invisible.
+	var failed atomic.Bool
+
 	for range workers {
 		go func() {
 			for j := range jobs {
 				err := e.drainNode(ctx, j.name)
+				if err != nil {
+					failed.Store(true)
+				}
 				results <- NodeResult{Node: j.name, Code: exitcode.Of(err), Err: err}
 			}
 		}()
 	}
-	go func() {
+
+	var (
+		dispatched []string
+		skipped    []string
+	)
+	func() {
+		defer close(jobs)
 		for i := range e.scope.Nodes {
-			jobs <- job{name: e.scope.Nodes[i].Name}
+			name := e.scope.Nodes[i].Name
+			if failed.Load() {
+				skipped = append(skipped, name)
+				continue
+			}
+			jobs <- job{name: name}
+			dispatched = append(dispatched, name)
 		}
-		close(jobs)
 	}()
 
-	// One worker failing must not abandon in-flight work on other nodes: let
-	// them finish the node they are on, then report the aggregate.
 	var res Result
-	for range e.scope.Nodes {
+	for range dispatched {
 		res.Nodes = append(res.Nodes, <-results)
+	}
+	// Phase 1 cordoned these too, so they are reported rather than omitted.
+	for _, name := range skipped {
+		res.Nodes = append(res.Nodes, NodeResult{Node: name, Skipped: true})
 	}
 	return res
 }
@@ -252,8 +286,11 @@ func (e *Engine) podsOn(node string, class classify.Class) []classify.Result {
 func (e *Engine) pvcsFor(pod *corev1.Pod) []scope.PVCTarget {
 	var out []scope.PVCTarget
 	for _, t := range e.scope.PVCs {
-		if t.Pod.Namespace == pod.Namespace && t.Pod.Name == pod.Name {
-			out = append(out, t)
+		for _, p := range t.Pods {
+			if p.Namespace == pod.Namespace && p.Name == pod.Name {
+				out = append(out, t)
+				break
+			}
 		}
 	}
 	return out
@@ -349,9 +386,25 @@ func (e *Engine) movePod(ctx context.Context, phase, node string, r classify.Res
 		Msg: "pod terminated", Duration: time.Since(start),
 	})
 
+	e.markMoved(pod)
+
 	// Step 4.
+	//
+	// Only once this pod is the last in-scope consumer. While another selected
+	// pod still references the claim, pvc-protection holding it is the correct
+	// state, not a stall — waiting here would burn the PVC timeout and fail a
+	// node for doing exactly what the API is supposed to do.
 	for _, t := range targets {
 		if !t.Deletable(e.scope.Provider.Disabled) {
+			continue
+		}
+		if !e.lastConsumer(t, pod) {
+			e.rec.Event(output.Event{
+				Phase: phase, Node: node, Namespace: t.PVC.Namespace,
+				Kind: "pvc", Name: t.PVC.Name,
+				Msg:   "still referenced by another pod in scope; verifying after that one moves",
+				Attrs: map[string]string{"consumers": fmt.Sprint(len(t.Pods))},
+			})
 			continue
 		}
 		if err := e.waitPVCGone(ctx, phase, node, t); err != nil {
@@ -514,7 +567,14 @@ func (e *Engine) evict(ctx context.Context, pod *corev1.Pod) error {
 // under the same namespace and name, so a name-only check can see the
 // replacement and conclude the original is gone before it actually is.
 func (e *Engine) waitPodGone(ctx context.Context, phase, node string, pod *corev1.Pod, start time.Time) error {
-	deadline := start.Add(e.opts.EvictionTimeout)
+	// Its own budget, measured from when the wait begins.
+	//
+	// Sharing the eviction budget meant a pod whose eviction spent nine minutes
+	// being refused by a PDB — then succeeded — entered this wait with seconds
+	// left and failed on its first poll, reporting that it had not terminated
+	// while it was terminating perfectly normally. On a NotReady node that
+	// produced the force-delete advice, which this code calls catastrophic.
+	deadline := time.Now().Add(e.opts.EvictionTimeout)
 
 	for {
 		got, err := e.client.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
@@ -522,7 +582,7 @@ func (e *Engine) waitPodGone(ctx context.Context, phase, node string, pod *corev
 			return nil
 		}
 		if err != nil {
-			return exitcode.Wrap(exitcode.Error, err)
+			return wrapAPIError(err)
 		}
 		if got.UID != pod.UID {
 			return nil // already replaced, so the original is gone
@@ -557,7 +617,7 @@ func (e *Engine) waitPVCGone(ctx context.Context, phase, node string, t scope.PV
 			return nil
 		}
 		if err != nil {
-			return exitcode.Wrap(exitcode.Error, err)
+			return wrapAPIError(err)
 		}
 		if got.UID != t.PVC.UID {
 			// The original is gone and the controller has already created a
@@ -626,8 +686,17 @@ func (e *Engine) waitWorkloadReady(ctx context.Context, phase, node string, r cl
 
 	for {
 		ready, err := e.readyReplicas(ctx, ns, r.ControllerKind, r.ControllerName)
-		if err != nil {
-			return exitcode.Wrap(exitcode.Error, err)
+		switch {
+		case errors.Is(err, errControllerGone):
+			// The workload was removed while the drain ran. There is no
+			// replacement to wait for and that is not this tool's problem.
+			e.rec.Event(output.Event{
+				Phase: phase, Node: node, Namespace: ns,
+				Msg: fmt.Sprintf("%s/%s no longer exists; nothing to wait for", r.ControllerKind, r.ControllerName),
+			})
+			return nil
+		case err != nil:
+			return wrapAPIError(err)
 		}
 		if ready >= want {
 			e.rec.Event(output.Event{
@@ -672,25 +741,25 @@ func (e *Engine) readyReplicas(ctx context.Context, ns, kind, name string) (int3
 	case "Deployment":
 		d, err := e.client.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
-			return 0, ignoreNotFound(err)
+			return 0, goneIfNotFound(err)
 		}
 		return d.Status.ReadyReplicas, nil
 	case "StatefulSet":
 		s, err := e.client.AppsV1().StatefulSets(ns).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
-			return 0, ignoreNotFound(err)
+			return 0, goneIfNotFound(err)
 		}
 		return s.Status.ReadyReplicas, nil
 	case "ReplicaSet":
 		rs, err := e.client.AppsV1().ReplicaSets(ns).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
-			return 0, ignoreNotFound(err)
+			return 0, goneIfNotFound(err)
 		}
 		return rs.Status.ReadyReplicas, nil
 	case "ReplicationController":
 		rc, err := e.client.CoreV1().ReplicationControllers(ns).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
-			return 0, ignoreNotFound(err)
+			return 0, goneIfNotFound(err)
 		}
 		return rc.Status.ReadyReplicas, nil
 	default:
@@ -700,12 +769,51 @@ func (e *Engine) readyReplicas(ctx context.Context, ns, kind, name string) (int3
 
 var errUnknownController = errors.New("unknown controller kind")
 
-// ignoreNotFound treats a deleted controller as "nothing to wait for" rather
-// than an error: the workload was removed mid-drain, which is not this tool's
-// problem to solve.
-func ignoreNotFound(err error) error {
+// errControllerGone reports a controller that no longer exists.
+//
+// It needs to be distinguishable from "zero replicas ready". Returning (0, nil)
+// for a NotFound — which is what the old helper did, despite a comment claiming
+// it meant "nothing to wait for" — made waitWorkloadReady see 0 < desired and
+// poll until the eviction timeout, then report that a replacement never became
+// ready. Deleting a Deployment mid-drain cost ten minutes per pod and a false
+// exit 4.
+var errControllerGone = errors.New("controller no longer exists")
+
+func goneIfNotFound(err error) error {
 	if apierrors.IsNotFound(err) {
-		return nil
+		return errControllerGone
 	}
 	return err
+}
+
+// wrapAPIError attaches the right exit code to a failed API call.
+//
+// Every wait loop calls the API before selecting on ctx.Done(), so on Ctrl-C
+// the call returns context.Canceled first and used to be wrapped as a generic
+// error. exitcode.Interrupted existed at five sites and was unreachable at all
+// of them, which left a wrapper unable to tell "the operator stopped this" from
+// "the cluster broke".
+func wrapAPIError(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return exitcode.Wrap(exitcode.Interrupted, err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return exitcode.Wrap(exitcode.Error, err)
+	}
+	return exitcode.Wrap(exitcode.Error, err)
+}
+
+// markMoved records that a pod is off its node.
+func (e *Engine) markMoved(pod *corev1.Pod) {
+	e.movedMu.Lock()
+	defer e.movedMu.Unlock()
+	e.moved[pod.Namespace+"/"+pod.Name] = true
+}
+
+// lastConsumer answers whether every other pod referencing this claim has
+// already been moved.
+func (e *Engine) lastConsumer(t scope.PVCTarget, pod *corev1.Pod) bool {
+	e.movedMu.Lock()
+	defer e.movedMu.Unlock()
+	return t.LastConsumer(pod, e.moved)
 }

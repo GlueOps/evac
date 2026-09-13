@@ -66,6 +66,8 @@ type payload struct {
 	flushed chan struct{}
 	// progress, when non-nil, replaces the transient status line.
 	progress *string
+	// shutdown tells the writer goroutine to stop. See Close.
+	shutdown bool
 }
 
 // New builds a Recorder and opens the log file.
@@ -125,6 +127,9 @@ func (r *Recorder) run() {
 	enc := json.NewEncoder(r.stdout)
 
 	for p := range r.events {
+		if p.shutdown {
+			return
+		}
 		if p.flushed != nil {
 			close(p.flushed)
 			continue
@@ -244,9 +249,16 @@ func (r *Recorder) Flush() {
 
 // Close drains the queue and closes the file. It must run before the process
 // exits or the final — most important — lines are lost.
+//
+// Shutdown is a sentinel payload rather than close(r.events), because closing
+// the channel races every in-flight send: a send on a closed channel is a
+// *ready* case in a select, so `send` would panic rather than take its
+// r.done branch. The window is small but real, and a panic here loses the exit
+// code and the tail of the audit file — the two things most worth having.
+// Nothing ever closes r.events now, so that race cannot exist.
 func (r *Recorder) Close() error {
 	r.closeOnce.Do(func() {
-		close(r.events)
+		r.send(payload{shutdown: true})
 		<-r.done
 		if r.file != nil {
 			r.closeErr = r.file.Close()

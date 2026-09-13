@@ -6,6 +6,7 @@
 package lock
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -100,7 +101,10 @@ func AcquireAt(path, context string) (*Lock, error) {
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		holder := readHolder(path)
 		_ = f.Close()
-		if err == unix.EWOULDBLOCK {
+		// errors.Is, not ==: the syscall wrapper is free to return a wrapped
+		// errno, and a direct comparison would silently fall through to the
+		// generic error path and report the wrong exit code.
+		if errors.Is(err, unix.EWOULDBLOCK) {
 			return nil, &HeldError{Path: path, Holder: holder}
 		}
 		return nil, fmt.Errorf("locking %s: %w", path, err)

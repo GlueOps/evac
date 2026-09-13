@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -816,5 +817,85 @@ func TestOnlyJobPodsStillReportsTheJobDeadlineCode(t *testing.T) {
 	err := h.engine.phase4(context.Background(), "n1", time.Now())
 	if got := exitcode.Of(err); got != exitcode.JobTimeout {
 		t.Errorf("exit code = %d, want %d — a Job pod does finish on its own", got, exitcode.JobTimeout)
+	}
+}
+
+// --- shared claims ---------------------------------------------------------
+
+// A ReadWriteOnce local volume may be mounted by more than one pod on the same
+// node. Verifying the claim has gone while another in-scope pod still holds
+// pvc-protection is waiting for something that correctly is not happening yet —
+// it burned the PVC timeout and failed the node for doing the right thing.
+func TestSharedClaimIsVerifiedOnlyAfterTheLastPodMoves(t *testing.T) {
+	t.Parallel()
+	pvc, pv := localPair("app", "shared", "pv-a")
+	h := newHarness(t, kube.SnapshotFixture{
+		Nodes: []corev1.Node{node("n1")},
+		Pods: []corev1.Pod{
+			pod("app", "reader", "n1", "shared"),
+			pod("app", "writer", "n1", "shared"),
+		},
+		PVCs: []corev1.PersistentVolumeClaim{pvc},
+		PVs:  []corev1.PersistentVolume{pv},
+	}, "n1")
+
+	if len(h.scope.PVCs) != 1 {
+		t.Fatalf("scope holds %d claim(s), want 1", len(h.scope.PVCs))
+	}
+	target := h.scope.PVCs[0]
+	if len(target.Pods) != 2 {
+		t.Fatalf("claim records %d consumer(s), want 2 — the second pod was dropped", len(target.Pods))
+	}
+
+	first, second := h.scope.Pods[0].Pod, h.scope.Pods[1].Pod
+
+	// Nothing moved yet: neither pod is the last.
+	if h.engine.lastConsumer(target, first) {
+		t.Error("the first pod was treated as the last consumer; its verification would block on the other pod's finalizer")
+	}
+	// Once the first has moved, the second is.
+	h.engine.markMoved(first)
+	if !h.engine.lastConsumer(target, second) {
+		t.Error("the second pod was not treated as the last consumer; the claim would never be verified")
+	}
+
+	// Both pods must still see the claim in step 1, so the PVC-first ordering
+	// holds for each of them.
+	for _, p := range []*corev1.Pod{first, second} {
+		if got := h.engine.pvcsFor(p); len(got) != 1 {
+			t.Errorf("pvcsFor(%s) returned %d target(s), want 1", p.Name, len(got))
+		}
+	}
+}
+
+// --- controller removed mid-drain ------------------------------------------
+
+// Returning (0, nil) for a NotFound made this poll to the eviction timeout and
+// then report that a replacement never became ready — ten minutes and a false
+// exit 4 because someone deleted a Deployment.
+func TestDeletedControllerEndsTheWaitImmediately(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, kube.SnapshotFixture{
+		Nodes:        []corev1.Node{node("n1")},
+		Pods:         []corev1.Pod{pod("app", "web-0", "n1")},
+		StatefulSets: []appsv1.StatefulSet{{ObjectMeta: metav1.ObjectMeta{Namespace: "app", Name: "web"}}},
+	}, "n1")
+	h.client.PrependReactor("get", "statefulsets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewNotFound(schema.GroupResource{Resource: "statefulsets"}, "web")
+	})
+
+	want := int32(3)
+	r := h.scope.Pods[0]
+	r.ControllerKind, r.ControllerName, r.Replicas = "StatefulSet", "web", &want
+
+	start := time.Now()
+	if err := h.engine.waitWorkloadReady(context.Background(), "2", "n1", r); err != nil {
+		t.Fatalf("a deleted controller was reported as a failure: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("took %s; the wait should end as soon as the controller is known to be gone", elapsed)
+	}
+	if !strings.Contains(h.output(), "no longer exists") {
+		t.Errorf("the operator was not told why the wait ended:\n%s", h.output())
 	}
 }

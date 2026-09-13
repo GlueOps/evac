@@ -127,7 +127,11 @@ func classify(err error) exitcode.Code {
 		"invalid argument",
 		"flag needs an argument",
 	} {
-		if strings.HasPrefix(err.Error(), prefix) || strings.Contains(err.Error(), prefix) {
+		// Prefix only. A substring match also caught API failures whose text
+		// merely contains one of these phrases — "connect: invalid argument"
+		// from a dial failure being the obvious one — and reported the
+		// cluster's problem as the operator's typo.
+		if strings.HasPrefix(err.Error(), prefix) {
 			return exitcode.Usage
 		}
 	}
