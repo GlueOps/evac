@@ -160,10 +160,23 @@ func IsControlPlane(n *corev1.Node) (bool, string) {
 			return true, "label " + l
 		}
 	}
+	// The key set matches the label set above: a legacy cluster that taints
+	// with node-role.kubernetes.io/master and sets no label would otherwise be
+	// a control plane only one of the two paths recognises.
+	//
+	// The effect stays pinned to NoSchedule. A PreferNoSchedule taint is an
+	// advisory rather than a control-plane marker, and this function also gates
+	// the refusal to drain a control-plane node at all — widening it there
+	// would start refusing ordinary workers, which has no override.
 	for i := range n.Spec.Taints {
 		t := &n.Spec.Taints[i]
-		if t.Key == taintControlPlane && t.Effect == corev1.TaintEffectNoSchedule {
-			return true, "taint " + taintControlPlane + ":NoSchedule"
+		if t.Effect != corev1.TaintEffectNoSchedule {
+			continue
+		}
+		for _, k := range []string{taintControlPlane, labelMaster, labelEtcd} {
+			if t.Key == k {
+				return true, "taint " + k + ":NoSchedule"
+			}
 		}
 	}
 	return false, ""

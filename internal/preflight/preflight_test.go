@@ -54,6 +54,23 @@ func noScheduleTaint() nodeOpt {
 	}
 }
 
+func noExecuteTaint() nodeOpt {
+	return func(n *corev1.Node) {
+		n.Spec.Taints = append(n.Spec.Taints, corev1.Taint{Key: "dedicated", Effect: corev1.TaintEffectNoExecute})
+	}
+}
+
+// controlPlaneTaint is the stock kubeadm marking, as opposed to an arbitrary
+// NoSchedule taint. Tests that claim to exercise the kubeadm shape need this
+// one, not noScheduleTaint.
+func controlPlaneTaint() nodeOpt {
+	return func(n *corev1.Node) {
+		n.Spec.Taints = append(n.Spec.Taints, corev1.Taint{
+			Key: "node-role.kubernetes.io/control-plane", Effect: corev1.TaintEffectNoSchedule,
+		})
+	}
+}
+
 type podOpt func(*corev1.Pod)
 
 func pod(ns, name, nodeName, cpu, mem string, opts ...podOpt) corev1.Pod {
@@ -178,6 +195,7 @@ func TestCordonedAndTaintedNodesAreNotCountedAsCapacity(t *testing.T) {
 	}{
 		{"cordoned", cordoned()},
 		{"NoSchedule taint", noScheduleTaint()},
+		{"NoExecute taint", noExecuteTaint()},
 		{"NotReady", notReady()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -358,7 +376,7 @@ func TestTaintedControlPlaneIsReportedAsNoCapacityNotAsControlPlaneOnly(t *testi
 	res := run(t,
 		[]corev1.Node{
 			node("agent-0", "4", "8Gi"),
-			node("server-0", "8", "16Gi", controlPlane(), noScheduleTaint()),
+			node("server-0", "8", "16Gi", controlPlane(), controlPlaneTaint()),
 		},
 		[]corev1.Pod{pod("app", "web", "agent-0", "1", "1Gi")},
 		"agent-0")
@@ -397,10 +415,13 @@ func TestEveryRemainingControlPlaneNodeIsNamedInOrder(t *testing.T) {
 	}
 }
 
-// An etcd-labelled node is control plane too. The signals are defined in one
-// place, and this pins that this check uses that definition rather than a
-// second copy of it that could drift.
-func TestControlPlaneDetectionUsesTheSharedSignals(t *testing.T) {
+// Preflight must treat all three control-plane labels alike, not just the
+// modern one.
+//
+// This cannot prove the detection is not a duplicated copy of the signals —
+// the literals here are the same either way — so it does not claim to. What it
+// pins is that preflight agrees with inventory about what a control plane is.
+func TestPreflightRecognisesEveryControlPlaneLabel(t *testing.T) {
 	t.Parallel()
 	for _, label := range []string{
 		"node-role.kubernetes.io/control-plane",
@@ -514,6 +535,15 @@ func TestAFullSurvivingWorkerDoesNotSilenceTheCheck(t *testing.T) {
 	if !strings.Contains(f.Summary, "server-0") {
 		t.Errorf("Summary = %q, want it to name the control plane node", f.Summary)
 	}
+	// This is the branch taken when workers survive but cannot absorb the
+	// load. It needs its own explanation, not just a node name.
+	if !strings.Contains(f.Summary, "control plane") {
+		t.Errorf("Summary = %q, want it to say what is wrong, not just name nodes", f.Summary)
+	}
+	joined := strings.Join(f.Detail, "\n")
+	if !strings.Contains(joined, "has to move") || !strings.Contains(joined, "fix:") {
+		t.Errorf("Detail = %q, want the shortfall and a remediation line", joined)
+	}
 }
 
 // The mirror image: workers that can absorb the load mean there is nothing to
@@ -597,4 +627,60 @@ func daemonSetPod(ns, name, nodeName, cpu, mem string) corev1.Pod {
 		APIVersion: "apps/v1", Kind: "DaemonSet", Name: "ds", Controller: ptr(true),
 	}}
 	return p
+}
+
+// The finding has to say what is wrong and what to do, not just name a node.
+// Asserting only on node names let the summary be gutted to a bare list and
+// the remediation deleted outright, with the suite still green.
+func TestTheFindingExplainsItselfAndSaysWhatToDo(t *testing.T) {
+	t.Parallel()
+	res := run(t,
+		[]corev1.Node{
+			node("agent-0", "4", "8Gi"),
+			node("server-0", "16", "32Gi", controlPlane()),
+		},
+		[]corev1.Pod{pod("app", "a", "agent-0", "3", "6Gi")},
+		"agent-0")
+
+	f := find(res, "control-plane-only")
+	if f == nil {
+		t.Fatal("no control-plane-only finding")
+	}
+	if !strings.Contains(f.Summary, "control plane") {
+		t.Errorf("Summary = %q, want it to say what is wrong, not just name nodes", f.Summary)
+	}
+	joined := strings.Join(f.Detail, "\n")
+	if joined == "" {
+		t.Fatal("Detail is empty; the operator is told nothing about what to do")
+	}
+	if !strings.Contains(joined, "fix:") {
+		t.Errorf("Detail = %q, want a remediation line", joined)
+	}
+	if !strings.Contains(joined, "capacity check") {
+		t.Errorf("Detail = %q, want it to explain why the capacity check disagrees", joined)
+	}
+}
+
+// A NotReady worker is not a landing place, so it must not silence the check
+// any more than a cordoned one does — and the operator must be told which node
+// and why, since "drop nodes from the selection" is no help here either.
+func TestANotReadyWorkerIsNamedWithTheReasonItIsUnavailable(t *testing.T) {
+	t.Parallel()
+	res := run(t,
+		[]corev1.Node{
+			node("agent-0", "4", "8Gi", notReady()),
+			node("agent-1", "4", "8Gi"),
+			node("server-0", "16", "32Gi", controlPlane()),
+		},
+		[]corev1.Pod{pod("app", "a", "agent-1", "3", "6Gi")},
+		"agent-1")
+
+	f := find(res, "control-plane-only")
+	if f == nil {
+		t.Fatal("not flagged; agent-0 is NotReady so only server-0 can take the load")
+	}
+	joined := strings.Join(f.Detail, "\n")
+	if !strings.Contains(joined, "agent-0") || !strings.Contains(joined, "NotReady") {
+		t.Errorf("Detail = %q, want agent-0 named as NotReady", joined)
+	}
 }

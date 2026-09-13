@@ -24,7 +24,10 @@ const (
 	EvictionTimeout Code = 4
 	// PVCStuck means a PVC stayed Terminating past its timeout.
 	PVCStuck Code = 5
-	// Preflight means capacity, affinity or anti-affinity checks failed.
+	// Preflight means a preflight check failed: capacity, affinity,
+	// anti-affinity, or a selection whose workload would land on the control
+	// plane. Distinct from ControlPlane below, which means the selection named
+	// a control-plane node rather than merely targeting it as a destination.
 	Preflight Code = 6
 	// ControlPlane means the selection named a control-plane node.
 	ControlPlane Code = 7

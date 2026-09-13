@@ -50,7 +50,13 @@ func TestControlPlaneDetectionSignals(t *testing.T) {
 		{"k3s etcd label", node("a", labelled(labelEtcd, "true")), true, "label " + labelEtcd},
 		{"control-plane NoSchedule taint", node("a", tainted(taintControlPlane, corev1.TaintEffectNoSchedule)), true, "taint " + taintControlPlane + ":NoSchedule"},
 		{"plain worker", node("a"), false, ""},
+		// A legacy cluster may taint with the master key and set no label. The
+		// taint key set must match the label key set, or a control plane is
+		// visible to only one of the two detection paths.
+		{"legacy master NoSchedule taint", node("a", tainted(labelMaster, corev1.TaintEffectNoSchedule)), true, "taint " + labelMaster + ":NoSchedule"},
 		// A PreferNoSchedule taint is an advisory, not a control-plane marker.
+		// This function also gates the no-override refusal to drain a control
+		// plane node, so widening it would start refusing ordinary workers.
 		{"control-plane key with PreferNoSchedule only", node("a", tainted(taintControlPlane, corev1.TaintEffectPreferNoSchedule)), false, ""},
 	}
 	for _, tc := range tests {

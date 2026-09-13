@@ -128,12 +128,18 @@ func hasBlockingTaint(n *corev1.Node) bool {
 //
 // remainingNodes counts a schedulable control-plane node as a landing place,
 // which is right for capacity arithmetic and wrong as a destination for
-// everything. On kubeadm this can never fire: the control plane carries
-// node-role.kubernetes.io/control-plane:NoSchedule, so hasBlockingTaint drops
-// it from `remaining` before this runs. On k3s the server node is untainted and
-// schedulable, so draining every agent silently relocates the whole cluster
-// onto the node running the API server, etcd and the scheduler — reported, up
-// to now, as "ok — moving X onto 1 remaining node(s)".
+// everything. On k3s the server node is untainted and schedulable, so draining
+// every agent silently relocates the whole cluster onto the node running the
+// API server, etcd and the scheduler — reported, up to now, as "ok — moving X
+// onto 1 remaining node(s)".
+//
+// A stock kubeadm control plane carries node-role.kubernetes.io/control-plane
+// :NoSchedule, so hasBlockingTaint drops it from `remaining` and this never
+// runs. That is not a guarantee, and an earlier revision of this comment
+// wrongly stated it as one: a cluster whose control-plane taint was removed
+// outright, or softened to PreferNoSchedule, puts it back in the landing set
+// and this fires. Firing there is correct — the node really will receive the
+// workload.
 //
 // Fatal rather than a warning: there is always --ignore-preflight for the
 // operator who means it, and a single-node install never reaches here because
